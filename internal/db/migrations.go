@@ -25,7 +25,7 @@ var migrationStatements = []string{
 		amount_with_vat NUMERIC(18,2) NOT NULL,
 		status VARCHAR(20) NOT NULL DEFAULT 'GENERATED',
 		created_by_org_id UUID NOT NULL REFERENCES organizations(id),
-		created_by_user_id UUID NOT NULL REFERENCES "user"(id),
+		created_by_user_id UUID NOT NULL REFERENCES users(id),
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS uq_act_number ON act (act_number);`,
