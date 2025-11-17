@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: snowops_acts
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5450:5432"
+    volumes:
+      - acts-pgdata:/var/lib/postgresql/data
+
+volumes:
+  acts-pgdata: {}
