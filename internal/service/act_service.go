@@ -20,13 +20,13 @@ type PDFGenerator interface {
 }
 
 type ActService struct {
-	repo             *repository.ActRepository
-	pdf              PDFGenerator
-	vatRate          float64
-	validStatuses    []string
-	numberPrefix     string
-	workDescription  string
-	now              func() time.Time
+	repo            *repository.ActRepository
+	pdf             PDFGenerator
+	vatRate         float64
+	validStatuses   []string
+	numberPrefix    string
+	workDescription string
+	now             func() time.Time
 }
 
 type GenerateActInput struct {
@@ -65,8 +65,11 @@ func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput)
 	if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsContractor()) {
 		return nil, ErrPermissionDenied
 	}
-	if input.PeriodStart.IsZero() || input.PeriodEnd.IsZero() || input.PeriodStart.After(input.PeriodEnd) {
-		return nil, ErrInvalidInput
+	if input.PeriodStart.IsZero() || input.PeriodEnd.IsZero() {
+		return nil, fmt.Errorf("%w: period dates are required", ErrInvalidInput)
+	}
+	if input.PeriodStart.After(input.PeriodEnd) {
+		return nil, fmt.Errorf("%w: period_start must be before or equal to period_end", ErrInvalidInput)
 	}
 
 	periodStart := dateOnly(input.PeriodStart)
@@ -86,8 +89,11 @@ func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput)
 
 	contractStart := dateOnly(contract.StartAt)
 	contractEnd := dateOnly(contract.EndAt)
-	if periodStart.Before(contractStart) || periodEnd.After(contractEnd) {
-		return nil, ErrInvalidInput
+	if periodStart.Before(contractStart) {
+		return nil, fmt.Errorf("%w: period_start (%s) is before contract start date (%s)", ErrInvalidInput, periodStart.Format("2006-01-02"), contractStart.Format("2006-01-02"))
+	}
+	if periodEnd.After(contractEnd) {
+		return nil, fmt.Errorf("%w: period_end (%s) is after contract end date (%s)", ErrInvalidInput, periodEnd.Format("2006-01-02"), contractEnd.Format("2006-01-02"))
 	}
 
 	endExclusive := periodEnd.Add(24 * time.Hour)

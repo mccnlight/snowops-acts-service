@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -80,14 +81,14 @@ func (h *Handler) generateAct(c *gin.Context) {
 }
 
 func (h *Handler) handleError(c *gin.Context, err error) {
-	switch err {
-	case service.ErrPermissionDenied:
+	switch {
+	case errors.Is(err, service.ErrPermissionDenied):
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-	case service.ErrInvalidInput:
+	case errors.Is(err, service.ErrInvalidInput):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	case service.ErrNotFound:
+	case errors.Is(err, service.ErrNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case service.ErrNoTrips:
+	case errors.Is(err, service.ErrNoTrips):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 	default:
 		h.log.Error().Err(err).Msg("generate act failed")
