@@ -17,7 +17,7 @@ func NewRouter(handler *Handler, authMiddleware gin.HandlerFunc, env string) *gi
 	router.Use(gin.Recovery())
 	router.Use(cors.New(cors.Config{
 		AllowAllOrigins: true,
-		AllowMethods:    []string{"GET", "POST", "OPTIONS"},
+		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:    []string{"*"},
 		ExposeHeaders:   []string{"Content-Type", "Content-Disposition"},
 		MaxAge:          12 * time.Hour,
