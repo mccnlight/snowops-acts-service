@@ -59,10 +59,10 @@ func NewActService(repo *repository.ActRepository, pdf PDFGenerator, cfg *config
 }
 
 func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput) (*GenerateActResult, error) {
-	if input.Principal.IsDriver() || input.Principal.IsToo() {
+	if input.Principal.IsDriver() {
 		return nil, ErrPermissionDenied
 	}
-	if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsContractor()) {
+	if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsContractor() || input.Principal.IsLandfill()) {
 		return nil, ErrPermissionDenied
 	}
 	if input.PeriodStart.IsZero() || input.PeriodEnd.IsZero() {
@@ -97,9 +97,26 @@ func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput)
 	}
 
 	endExclusive := periodEnd.Add(24 * time.Hour)
-	trips, err := s.repo.ListTripsForPeriod(ctx, contract.ID, periodStart, endExclusive, s.validStatuses)
-	if err != nil {
-		return nil, err
+	var trips []model.TripForAct
+	if contract.ContractType == "LANDFILL_SERVICE" {
+		// Для LANDFILL контрактов получаем рейсы по полигонам
+		polygonIDs, err := s.repo.GetContractPolygonIDs(ctx, contract.ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(polygonIDs) == 0 {
+			return nil, fmt.Errorf("%w: contract has no polygons", ErrInvalidInput)
+		}
+		trips, err = s.repo.ListTripsForLandfillContract(ctx, contract.ID, polygonIDs, periodStart, endExclusive, s.validStatuses)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Для CONTRACTOR_SERVICE контрактов используем существующий метод
+		trips, err = s.repo.ListTripsForPeriod(ctx, contract.ID, periodStart, endExclusive, s.validStatuses)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var totalVolume float64
@@ -131,9 +148,20 @@ func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput)
 	now := dateOnly(s.now())
 	actNumber := s.buildActNumber(contract.ID, now)
 
+	contractorID := &contract.ContractorID
+	if contract.ContractorID == uuid.Nil {
+		contractorID = nil
+	}
+
+	status := model.ActStatusGenerated
+	if contract.ContractType == "LANDFILL_SERVICE" {
+		status = model.ActStatusPendingApproval
+	}
+
 	act := model.Act{
 		ContractID:      contract.ID,
-		ContractorID:    contract.ContractorID,
+		ContractorID:    contractorID,
+		LandfillID:      contract.LandfillID,
 		ActNumber:       actNumber,
 		ActDate:         now,
 		PeriodStart:     periodStart,
@@ -144,7 +172,7 @@ func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput)
 		VATRate:         s.vatRate,
 		VATAmount:       vatAmount,
 		AmountWithVAT:   amountWithVAT,
-		Status:          "GENERATED",
+		Status:          status,
 		CreatedByOrgID:  input.Principal.OrgID,
 		CreatedByUserID: input.Principal.UserID,
 	}
@@ -173,6 +201,113 @@ func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput)
 		Content:  content,
 		Act:      *savedAct,
 	}, nil
+}
+
+// ApproveAct подтверждает акт LANDFILL
+func (s *ActService) ApproveAct(ctx context.Context, actID uuid.UUID, principal model.Principal) error {
+	if !principal.IsLandfill() {
+		return ErrPermissionDenied
+	}
+
+	act, err := s.repo.GetActByID(ctx, actID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	if act.LandfillID == nil || *act.LandfillID != principal.OrgID {
+		return ErrPermissionDenied
+	}
+
+	if act.Status != model.ActStatusPendingApproval {
+		return fmt.Errorf("%w: act is not pending approval", ErrInvalidInput)
+	}
+
+	now := s.now()
+	return s.repo.UpdateActStatus(
+		ctx,
+		actID,
+		model.ActStatusApproved,
+		nil,
+		&principal.OrgID,
+		&principal.UserID,
+		&now,
+	)
+}
+
+// RejectAct отклоняет акт LANDFILL
+func (s *ActService) RejectAct(ctx context.Context, actID uuid.UUID, principal model.Principal, reason string) error {
+	if !principal.IsLandfill() {
+		return ErrPermissionDenied
+	}
+
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: rejection reason is required", ErrInvalidInput)
+	}
+
+	act, err := s.repo.GetActByID(ctx, actID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	if act.LandfillID == nil || *act.LandfillID != principal.OrgID {
+		return ErrPermissionDenied
+	}
+
+	if act.Status != model.ActStatusPendingApproval {
+		return fmt.Errorf("%w: act is not pending approval", ErrInvalidInput)
+	}
+
+	reasonStr := strings.TrimSpace(reason)
+	return s.repo.UpdateActStatus(
+		ctx,
+		actID,
+		model.ActStatusRejected,
+		&reasonStr,
+		nil,
+		nil,
+		nil,
+	)
+}
+
+// ListActsForLandfill возвращает список актов для LANDFILL
+func (s *ActService) ListActsForLandfill(ctx context.Context, principal model.Principal, status *model.ActStatus) ([]model.Act, error) {
+	if !principal.IsLandfill() {
+		return nil, ErrPermissionDenied
+	}
+
+	return s.repo.ListActsForLandfill(ctx, principal.OrgID, status)
+}
+
+// GetAct возвращает акт по ID
+func (s *ActService) GetAct(ctx context.Context, actID uuid.UUID, principal model.Principal) (*model.Act, error) {
+	act, err := s.repo.GetActByID(ctx, actID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	// Проверка прав доступа
+	if principal.IsLandfill() {
+		if act.LandfillID == nil || *act.LandfillID != principal.OrgID {
+			return nil, ErrPermissionDenied
+		}
+	} else if principal.IsContractor() {
+		if act.ContractorID == nil || *act.ContractorID != principal.OrgID {
+			return nil, ErrPermissionDenied
+		}
+	} else if !(principal.IsAkimat() || principal.IsKgu()) {
+		return nil, ErrPermissionDenied
+	}
+
+	return act, nil
 }
 
 func (s *ActService) buildActNumber(contractID uuid.UUID, actDate time.Time) string {

@@ -9,10 +9,18 @@ import (
 var migrationStatements = []string{
 	`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`,
 	`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`,
+	`DO $$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'act_status') THEN
+			CREATE TYPE act_status AS ENUM ('GENERATED', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED');
+		END IF;
+	END
+	$$;`,
 	`CREATE TABLE IF NOT EXISTS act (
 		id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 		contract_id UUID NOT NULL REFERENCES contracts(id),
-		contractor_id UUID NOT NULL REFERENCES organizations(id),
+		contractor_id UUID REFERENCES organizations(id),
+		landfill_id UUID REFERENCES organizations(id),
 		act_number VARCHAR(64) NOT NULL,
 		act_date DATE NOT NULL,
 		period_start DATE NOT NULL,
@@ -23,13 +31,20 @@ var migrationStatements = []string{
 		vat_rate NUMERIC(5,2) NOT NULL,
 		vat_amount NUMERIC(18,2) NOT NULL,
 		amount_with_vat NUMERIC(18,2) NOT NULL,
-		status VARCHAR(20) NOT NULL DEFAULT 'GENERATED',
+		status act_status NOT NULL DEFAULT 'GENERATED',
+		rejection_reason TEXT,
+		approved_by_org_id UUID REFERENCES organizations(id),
+		approved_by_user_id UUID REFERENCES users(id),
+		approved_at TIMESTAMPTZ,
 		created_by_org_id UUID NOT NULL REFERENCES organizations(id),
 		created_by_user_id UUID NOT NULL REFERENCES users(id),
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS uq_act_number ON act (act_number);`,
 	`CREATE INDEX IF NOT EXISTS idx_act_contract_id ON act (contract_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_act_contractor_id ON act (contractor_id) WHERE contractor_id IS NOT NULL;`,
+	`CREATE INDEX IF NOT EXISTS idx_act_landfill_id ON act (landfill_id) WHERE landfill_id IS NOT NULL;`,
+	`CREATE INDEX IF NOT EXISTS idx_act_status ON act (status);`,
 	`CREATE TABLE IF NOT EXISTS act_trip (
 		act_id UUID NOT NULL REFERENCES act(id) ON DELETE CASCADE,
 		trip_id UUID NOT NULL REFERENCES trips(id),
