@@ -40,6 +40,31 @@ var migrationStatements = []string{
 		created_by_user_id UUID NOT NULL REFERENCES users(id),
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);`,
+	`DO $$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'act' AND column_name = 'landfill_id') THEN
+			ALTER TABLE act ADD COLUMN landfill_id UUID REFERENCES organizations(id);
+		END IF;
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'act' AND column_name = 'status') THEN
+			ALTER TABLE act ADD COLUMN status act_status NOT NULL DEFAULT 'GENERATED';
+		END IF;
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'act' AND column_name = 'rejection_reason') THEN
+			ALTER TABLE act ADD COLUMN rejection_reason TEXT;
+		END IF;
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'act' AND column_name = 'approved_by_org_id') THEN
+			ALTER TABLE act ADD COLUMN approved_by_org_id UUID REFERENCES organizations(id);
+		END IF;
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'act' AND column_name = 'approved_by_user_id') THEN
+			ALTER TABLE act ADD COLUMN approved_by_user_id UUID REFERENCES users(id);
+		END IF;
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'act' AND column_name = 'approved_at') THEN
+			ALTER TABLE act ADD COLUMN approved_at TIMESTAMPTZ;
+		END IF;
+		IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'act' AND column_name = 'contractor_id' AND is_nullable = 'NO') THEN
+			ALTER TABLE act ALTER COLUMN contractor_id DROP NOT NULL;
+		END IF;
+	END
+	$$;`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS uq_act_number ON act (act_number);`,
 	`CREATE INDEX IF NOT EXISTS idx_act_contract_id ON act (contract_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_act_contractor_id ON act (contractor_id) WHERE contractor_id IS NOT NULL;`,
