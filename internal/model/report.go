@@ -17,7 +17,7 @@ type TripGroup struct {
 	ID        uuid.UUID
 	Name      string
 	TripCount int64
-	Trips     []TripDetail
+	Trips     []TripDetail `gorm:"-"`
 }
 
 type TripDetail struct {
