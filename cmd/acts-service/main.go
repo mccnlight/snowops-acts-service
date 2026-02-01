@@ -7,10 +7,10 @@ import (
 	"github.com/nurpe/snowops-acts/internal/auth"
 	"github.com/nurpe/snowops-acts/internal/config"
 	"github.com/nurpe/snowops-acts/internal/db"
+	"github.com/nurpe/snowops-acts/internal/excel"
 	httphandler "github.com/nurpe/snowops-acts/internal/http"
 	"github.com/nurpe/snowops-acts/internal/http/middleware"
 	"github.com/nurpe/snowops-acts/internal/logger"
-	"github.com/nurpe/snowops-acts/internal/pdf"
 	"github.com/nurpe/snowops-acts/internal/repository"
 	"github.com/nurpe/snowops-acts/internal/service"
 )
@@ -29,13 +29,10 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to connect database")
 	}
 
-	actRepo := repository.NewActRepository(database)
-	pdfGenerator, err := pdf.NewGenerator()
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to init pdf generator")
-	}
+	reportRepo := repository.NewReportRepository(database)
+	excelGenerator := excel.NewGenerator()
 
-	actService := service.NewActService(actRepo, pdfGenerator, cfg)
+	actService := service.NewActService(reportRepo, excelGenerator, cfg)
 
 	tokenParser := auth.NewParser(cfg.Auth.AccessSecret)
 	handler := httphandler.NewHandler(actService, log)

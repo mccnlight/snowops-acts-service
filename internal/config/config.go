@@ -24,10 +24,7 @@ type AuthConfig struct {
 }
 
 type ActsConfig struct {
-	VATRate         float64
 	ValidStatuses   []string
-	NumberPrefix    string
-	WorkDescription string
 }
 
 type Config struct {
@@ -66,10 +63,7 @@ func Load() (*Config, error) {
 			AccessSecret: v.GetString("JWT_ACCESS_SECRET"),
 		},
 		Acts: ActsConfig{
-			VATRate:         v.GetFloat64("ACTS_VAT_RATE"),
 			ValidStatuses:   parseList(v.GetString("ACTS_VALID_STATUSES")),
-			NumberPrefix:    v.GetString("ACTS_NUMBER_PREFIX"),
-			WorkDescription: v.GetString("ACTS_WORK_DESCRIPTION"),
 		},
 	}
 
@@ -82,17 +76,8 @@ func Load() (*Config, error) {
 	if cfg.HTTP.Port == 0 {
 		cfg.HTTP.Port = 7089
 	}
-	if cfg.Acts.VATRate <= 0 {
-		cfg.Acts.VATRate = 12.0
-	}
 	if len(cfg.Acts.ValidStatuses) == 0 {
 		cfg.Acts.ValidStatuses = []string{"OK"}
-	}
-	if cfg.Acts.NumberPrefix == "" {
-		cfg.Acts.NumberPrefix = "ACT"
-	}
-	if cfg.Acts.WorkDescription == "" {
-		cfg.Acts.WorkDescription = "Maintenance of snow disposal sites for receiving removed snow"
 	}
 
 	if err := validate(cfg); err != nil {
@@ -107,9 +92,6 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Auth.AccessSecret == "" {
 		return fmt.Errorf("JWT_ACCESS_SECRET is required")
-	}
-	if cfg.Acts.VATRate < 0 {
-		return fmt.Errorf("ACTS_VAT_RATE must be >= 0")
 	}
 	return nil
 }

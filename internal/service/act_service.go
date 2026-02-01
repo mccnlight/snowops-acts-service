@@ -1,351 +1,254 @@
 package service
 
 import (
-	"context"
-	"fmt"
-	"math"
-	"strings"
-	"time"
+    "context"
+    "fmt"
+    "strings"
+    "time"
 
-	"github.com/google/uuid"
-	"gorm.io/gorm"
+    "github.com/google/uuid"
+    "gorm.io/gorm"
 
-	"github.com/nurpe/snowops-acts/internal/config"
-	"github.com/nurpe/snowops-acts/internal/model"
-	"github.com/nurpe/snowops-acts/internal/repository"
+    "github.com/nurpe/snowops-acts/internal/config"
+    "github.com/nurpe/snowops-acts/internal/model"
+    "github.com/nurpe/snowops-acts/internal/repository"
 )
 
-type PDFGenerator interface {
-	Generate(doc model.ActDocument) ([]byte, error)
+type ExcelGenerator interface {
+    Generate(report model.ActReport) ([]byte, error)
 }
 
 type ActService struct {
-	repo            *repository.ActRepository
-	pdf             PDFGenerator
-	vatRate         float64
-	validStatuses   []string
-	numberPrefix    string
-	workDescription string
-	now             func() time.Time
+	repo          *repository.ReportRepository
+	excel         ExcelGenerator
+	validStatuses []string
 }
 
-type GenerateActInput struct {
-	ContractID  uuid.UUID
-	PeriodStart time.Time
-	PeriodEnd   time.Time
-	Principal   model.Principal
+type GenerateReportInput struct {
+    Mode        model.ReportMode
+    TargetID    uuid.UUID
+    PeriodStart time.Time
+    PeriodEnd   time.Time
+    Principal   model.Principal
 }
 
-type GenerateActResult struct {
-	FileName string
-	Content  []byte
-	Act      model.Act
+type GenerateReportResult struct {
+    FileName string
+    Content  []byte
 }
 
-func NewActService(repo *repository.ActRepository, pdf PDFGenerator, cfg *config.Config) *ActService {
-	statuses := make([]string, len(cfg.Acts.ValidStatuses))
-	for i, status := range cfg.Acts.ValidStatuses {
-		statuses[i] = strings.ToUpper(status)
-	}
-	return &ActService{
-		repo:            repo,
-		pdf:             pdf,
-		vatRate:         cfg.Acts.VATRate,
-		validStatuses:   statuses,
-		numberPrefix:    cfg.Acts.NumberPrefix,
-		workDescription: cfg.Acts.WorkDescription,
-		now:             time.Now,
+func NewActService(repo *repository.ReportRepository, excel ExcelGenerator, cfg *config.Config) *ActService {
+    statuses := make([]string, 0, len(cfg.Acts.ValidStatuses))
+    for _, status := range cfg.Acts.ValidStatuses {
+        status = strings.ToUpper(strings.TrimSpace(status))
+        if status != "" {
+            statuses = append(statuses, status)
+        }
+    }
+    if len(statuses) == 0 {
+        statuses = []string{"OK"}
+    }
+
+    return &ActService{
+        repo:          repo,
+        excel:         excel,
+        validStatuses: statuses,
 	}
 }
 
-func (s *ActService) GenerateActPDF(ctx context.Context, input GenerateActInput) (*GenerateActResult, error) {
-	if input.Principal.IsDriver() {
-		return nil, ErrPermissionDenied
-	}
-	if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsContractor() || input.Principal.IsLandfill()) {
-		return nil, ErrPermissionDenied
-	}
-	if input.PeriodStart.IsZero() || input.PeriodEnd.IsZero() {
-		return nil, fmt.Errorf("%w: period dates are required", ErrInvalidInput)
-	}
-	if input.PeriodStart.After(input.PeriodEnd) {
-		return nil, fmt.Errorf("%w: period_start must be before or equal to period_end", ErrInvalidInput)
-	}
+func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInput) (*GenerateReportResult, error) {
+    if input.Principal.IsDriver() {
+        return nil, ErrPermissionDenied
+    }
+    if input.TargetID == uuid.Nil {
+        return nil, fmt.Errorf("%w: target_id is required", ErrInvalidInput)
+    }
+    if input.PeriodStart.IsZero() || input.PeriodEnd.IsZero() {
+        return nil, fmt.Errorf("%w: period dates are required", ErrInvalidInput)
+    }
 
-	periodStart := dateOnly(input.PeriodStart)
-	periodEnd := dateOnly(input.PeriodEnd)
+    periodStart := dateOnly(input.PeriodStart)
+    periodEnd := dateOnly(input.PeriodEnd)
+    if periodStart.After(periodEnd) {
+        return nil, fmt.Errorf("%w: period_start must be before or equal to period_end", ErrInvalidInput)
+    }
 
-	contract, err := s.repo.GetContract(ctx, input.ContractID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
+    endExclusive := periodEnd.Add(24 * time.Hour)
 
-	if input.Principal.IsContractor() && input.Principal.OrgID != contract.ContractorID {
-		return nil, ErrPermissionDenied
-	}
+	var target *model.Organization
+	var groups []model.TripGroup
+	var landfillPolygonIDs []uuid.UUID
 
-	contractStart := dateOnly(contract.StartAt)
-	contractEnd := dateOnly(contract.EndAt)
-	if periodStart.Before(contractStart) {
-		return nil, fmt.Errorf("%w: period_start (%s) is before contract start date (%s)", ErrInvalidInput, periodStart.Format("2006-01-02"), contractStart.Format("2006-01-02"))
-	}
-	if periodEnd.After(contractEnd) {
-		return nil, fmt.Errorf("%w: period_end (%s) is after contract end date (%s)", ErrInvalidInput, periodEnd.Format("2006-01-02"), contractEnd.Format("2006-01-02"))
-	}
+    switch input.Mode {
+    case model.ReportModeContractor:
+        if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsContractor()) {
+            return nil, ErrPermissionDenied
+        }
+        if input.Principal.IsContractor() && input.Principal.OrgID != input.TargetID {
+            return nil, ErrPermissionDenied
+        }
 
-	endExclusive := periodEnd.Add(24 * time.Hour)
-	var trips []model.TripForAct
-	if contract.ContractType == "LANDFILL_SERVICE" {
-		// Для LANDFILL контрактов получаем рейсы по полигонам
-		polygonIDs, err := s.repo.GetContractPolygonIDs(ctx, contract.ID)
+        org, err := s.repo.GetOrganization(ctx, input.TargetID)
+        if err != nil {
+            if err == gorm.ErrRecordNotFound {
+                return nil, ErrNotFound
+            }
+            return nil, err
+        }
+        target = org
+
+		polygons, err := s.repo.ListPolygons(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if len(polygonIDs) == 0 {
-			return nil, fmt.Errorf("%w: contract has no polygons", ErrInvalidInput)
-		}
-		trips, err = s.repo.ListTripsForLandfillContract(ctx, contract.ID, polygonIDs, periodStart, endExclusive, s.validStatuses)
+		counts, err := s.repo.TripCountsByPolygon(ctx, input.TargetID, periodStart, endExclusive, s.validStatuses)
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		// Для CONTRACTOR_SERVICE контрактов используем существующий метод
-		trips, err = s.repo.ListTripsForPeriod(ctx, contract.ID, periodStart, endExclusive, s.validStatuses)
+		groups = mergeGroups(polygons, counts)
+
+    case model.ReportModeLandfill:
+        if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsLandfill()) {
+            return nil, ErrPermissionDenied
+        }
+        if input.Principal.IsLandfill() && input.Principal.OrgID != input.TargetID {
+            return nil, ErrPermissionDenied
+        }
+
+        org, err := s.repo.GetOrganization(ctx, input.TargetID)
+        if err != nil {
+            if err == gorm.ErrRecordNotFound {
+                return nil, ErrNotFound
+            }
+            return nil, err
+        }
+        target = org
+
+		polygonIDs, err := s.repo.ListLandfillPolygonIDs(ctx, input.TargetID)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	var totalVolume float64
-	tripIDs := make([]uuid.UUID, 0, len(trips))
-	for _, trip := range trips {
-		totalVolume += trip.VolumeM3
-		tripIDs = append(tripIDs, trip.ID)
-	}
-
-	totalVolume = round(totalVolume, 3)
-	if totalVolume <= 0 {
-		return nil, ErrNoTrips
-	}
-
-	price := contract.PricePerM3
-	amountWoVAT := round(totalVolume*price, 2)
-	vatAmount := round(amountWoVAT*s.vatRate/100, 2)
-	amountWithVAT := round(amountWoVAT+vatAmount, 2)
-
-	paidBefore, err := s.repo.SumActs(ctx, contract.ID)
-	if err != nil {
-		return nil, err
-	}
-	budgetExceeded := false
-	if contract.BudgetTotal > 0 && paidBefore+amountWoVAT > contract.BudgetTotal {
-		budgetExceeded = true
-	}
-
-	now := dateOnly(s.now())
-	actNumber := s.buildActNumber(contract.ID, now)
-
-	contractorID := &contract.ContractorID
-	if contract.ContractorID == uuid.Nil {
-		contractorID = nil
-	}
-
-	status := model.ActStatusGenerated
-	if contract.ContractType == "LANDFILL_SERVICE" {
-		status = model.ActStatusPendingApproval
-	}
-
-	act := model.Act{
-		ContractID:      contract.ID,
-		ContractorID:    contractorID,
-		LandfillID:      contract.LandfillID,
-		ActNumber:       actNumber,
-		ActDate:         now,
-		PeriodStart:     periodStart,
-		PeriodEnd:       periodEnd,
-		TotalVolumeM3:   totalVolume,
-		PricePerM3:      price,
-		AmountWoVAT:     amountWoVAT,
-		VATRate:         s.vatRate,
-		VATAmount:       vatAmount,
-		AmountWithVAT:   amountWithVAT,
-		Status:          status,
-		CreatedByOrgID:  input.Principal.OrgID,
-		CreatedByUserID: input.Principal.UserID,
-	}
-
-	savedAct, err := s.repo.CreateAct(ctx, act, tripIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	doc := model.ActDocument{
-		Act:             *savedAct,
-		Contract:        *contract,
-		WorkDescription: s.workDescription,
-		PaidBefore:      paidBefore,
-		BudgetExceeded:  budgetExceeded,
-	}
-
-	content, err := s.pdf.Generate(doc)
-	if err != nil {
-		return nil, err
-	}
-
-	fileName := fmt.Sprintf("act-%s.pdf", sanitizeFileName(savedAct.ActNumber))
-	return &GenerateActResult{
-		FileName: fileName,
-		Content:  content,
-		Act:      *savedAct,
-	}, nil
-}
-
-// ApproveAct подтверждает акт LANDFILL
-func (s *ActService) ApproveAct(ctx context.Context, actID uuid.UUID, principal model.Principal) error {
-	if !principal.IsLandfill() {
-		return ErrPermissionDenied
-	}
-
-	act, err := s.repo.GetActByID(ctx, actID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return ErrNotFound
+		landfillPolygonIDs = polygonIDs
+		contractors, err := s.repo.ListContractors(ctx)
+		if err != nil {
+			return nil, err
 		}
-		return err
-	}
-
-	if act.LandfillID == nil || *act.LandfillID != principal.OrgID {
-		return ErrPermissionDenied
-	}
-
-	if act.Status != model.ActStatusPendingApproval {
-		return fmt.Errorf("%w: act is not pending approval", ErrInvalidInput)
-	}
-
-	now := s.now()
-	return s.repo.UpdateActStatus(
-		ctx,
-		actID,
-		model.ActStatusApproved,
-		nil,
-		&principal.OrgID,
-		&principal.UserID,
-		&now,
-	)
-}
-
-// RejectAct отклоняет акт LANDFILL
-func (s *ActService) RejectAct(ctx context.Context, actID uuid.UUID, principal model.Principal, reason string) error {
-	if !principal.IsLandfill() {
-		return ErrPermissionDenied
-	}
-
-	if strings.TrimSpace(reason) == "" {
-		return fmt.Errorf("%w: rejection reason is required", ErrInvalidInput)
-	}
-
-	act, err := s.repo.GetActByID(ctx, actID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return ErrNotFound
+		counts, err := s.repo.TripCountsByContractor(ctx, polygonIDs, periodStart, endExclusive, s.validStatuses)
+		if err != nil {
+			return nil, err
 		}
-		return err
+		groups = mergeGroups(contractors, counts)
+
+    default:
+        return nil, fmt.Errorf("%w: invalid report mode", ErrInvalidInput)
+    }
+
+	totalTrips := int64(0)
+	for _, group := range groups {
+		totalTrips += group.TripCount
 	}
-
-	if act.LandfillID == nil || *act.LandfillID != principal.OrgID {
-		return ErrPermissionDenied
-	}
-
-	if act.Status != model.ActStatusPendingApproval {
-		return fmt.Errorf("%w: act is not pending approval", ErrInvalidInput)
-	}
-
-	reasonStr := strings.TrimSpace(reason)
-	return s.repo.UpdateActStatus(
-		ctx,
-		actID,
-		model.ActStatusRejected,
-		&reasonStr,
-		nil,
-		nil,
-		nil,
-	)
-}
-
-// ListActsForLandfill возвращает список актов для LANDFILL
-func (s *ActService) ListActsForLandfill(ctx context.Context, principal model.Principal, status *model.ActStatus) ([]model.Act, error) {
-	if !principal.IsLandfill() {
-		return nil, ErrPermissionDenied
-	}
-
-	return s.repo.ListActsForLandfill(ctx, principal.OrgID, status)
-}
-
-// GetAct возвращает акт по ID
-func (s *ActService) GetAct(ctx context.Context, actID uuid.UUID, principal model.Principal) (*model.Act, error) {
-	act, err := s.repo.GetActByID(ctx, actID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, ErrNotFound
+	for i := range groups {
+		switch input.Mode {
+		case model.ReportModeContractor:
+			if groups[i].ID == uuid.Nil {
+				continue
+			}
+			trips, err := s.repo.ListTripsByPolygon(ctx, input.TargetID, groups[i].ID, periodStart, endExclusive, s.validStatuses)
+			if err != nil {
+				return nil, err
+			}
+			groups[i].Trips = trips
+		case model.ReportModeLandfill:
+			var contractorID *uuid.UUID
+			if groups[i].ID != uuid.Nil {
+				contractorID = &groups[i].ID
+			}
+			trips, err := s.repo.ListTripsByContractor(ctx, contractorID, landfillPolygonIDs, periodStart, endExclusive, s.validStatuses)
+			if err != nil {
+				return nil, err
+			}
+			groups[i].Trips = trips
 		}
-		return nil, err
 	}
 
-	// Проверка прав доступа
-	if principal.IsLandfill() {
-		if act.LandfillID == nil || *act.LandfillID != principal.OrgID {
-			return nil, ErrPermissionDenied
-		}
-	} else if principal.IsContractor() {
-		if act.ContractorID == nil || *act.ContractorID != principal.OrgID {
-			return nil, ErrPermissionDenied
-		}
-	} else if !(principal.IsAkimat() || principal.IsKgu()) {
-		return nil, ErrPermissionDenied
-	}
+	report := model.ActReport{
+		Mode:        input.Mode,
+		Target:      *target,
+		PeriodStart: periodStart,
+        PeriodEnd:   periodEnd,
+        TotalTrips:  totalTrips,
+        Groups:      groups,
+    }
 
-	return act, nil
+    content, err := s.excel.Generate(report)
+    if err != nil {
+        return nil, err
+    }
+
+    fileName := s.buildFileName(report)
+    return &GenerateReportResult{
+        FileName: fileName,
+        Content:  content,
+    }, nil
 }
 
-func (s *ActService) buildActNumber(contractID uuid.UUID, actDate time.Time) string {
-	hash := strings.ToUpper(contractID.String())
-	if len(hash) > 8 {
-		hash = hash[:8]
-	}
-	return fmt.Sprintf("%s-%s-%s", s.numberPrefix, hash, actDate.Format("20060102"))
-}
-
-func round(value float64, precision int) float64 {
-	factor := math.Pow(10, float64(precision))
-	return math.Round(value*factor) / factor
+func (s *ActService) buildFileName(report model.ActReport) string {
+    mode := strings.ToLower(string(report.Mode))
+    target := sanitizeFileName(report.Target.Name)
+    if target == "" {
+        target = report.Target.ID.String()
+    }
+    period := fmt.Sprintf("%s-%s", report.PeriodStart.Format("20060102"), report.PeriodEnd.Format("20060102"))
+    return fmt.Sprintf("acts-%s-%s-%s.xlsx", mode, target, period)
 }
 
 func dateOnly(t time.Time) time.Time {
-	if t.IsZero() {
-		return t
-	}
-	y, m, d := t.Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+    if t.IsZero() {
+        return t
+    }
+    y, m, d := t.Date()
+    return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
 func sanitizeFileName(input string) string {
-	result := make([]rune, 0, len(input))
-	for _, r := range input {
-		switch {
-		case r >= 'a' && r <= 'z':
-			result = append(result, r)
-		case r >= 'A' && r <= 'Z':
-			result = append(result, r)
-		case r >= '0' && r <= '9':
-			result = append(result, r)
-		case r == '-', r == '_':
-			result = append(result, r)
-		default:
-			result = append(result, '-')
-		}
+    result := make([]rune, 0, len(input))
+    for _, r := range input {
+        switch {
+        case r >= 'a' && r <= 'z':
+            result = append(result, r)
+        case r >= 'A' && r <= 'Z':
+            result = append(result, r)
+        case r >= '0' && r <= '9':
+            result = append(result, r)
+        case r == '-', r == '_':
+            result = append(result, r)
+        default:
+            result = append(result, '-')
+        }
+    }
+    return strings.Trim(string(result), "-")
+}
+
+func mergeGroups(base []model.TripGroup, counts []model.TripGroup) []model.TripGroup {
+	result := make([]model.TripGroup, 0, len(base)+len(counts))
+	index := make(map[uuid.UUID]int, len(base))
+
+	for _, group := range base {
+		result = append(result, group)
+		index[group.ID] = len(result) - 1
 	}
-	return strings.Trim(string(result), "-")
+
+	for _, group := range counts {
+		if pos, ok := index[group.ID]; ok {
+			result[pos].TripCount = group.TripCount
+			if result[pos].Name == "" {
+				result[pos].Name = group.Name
+			}
+			continue
+		}
+		result = append(result, group)
+		index[group.ID] = len(result) - 1
+	}
+
+	return result
 }
