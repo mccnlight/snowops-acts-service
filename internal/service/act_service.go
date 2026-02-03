@@ -21,7 +21,6 @@ type ExcelGenerator interface {
 type ActService struct {
 	repo          *repository.ReportRepository
 	excel         ExcelGenerator
-	validStatuses []string
 }
 
 type GenerateReportInput struct {
@@ -38,21 +37,9 @@ type GenerateReportResult struct {
 }
 
 func NewActService(repo *repository.ReportRepository, excel ExcelGenerator, cfg *config.Config) *ActService {
-    statuses := make([]string, 0, len(cfg.Acts.ValidStatuses))
-    for _, status := range cfg.Acts.ValidStatuses {
-        status = strings.ToUpper(strings.TrimSpace(status))
-        if status != "" {
-            statuses = append(statuses, status)
-        }
-    }
-    if len(statuses) == 0 {
-        statuses = []string{"OK"}
-    }
-
     return &ActService{
         repo:          repo,
         excel:         excel,
-        validStatuses: statuses,
 	}
 }
 
@@ -101,7 +88,7 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 		if err != nil {
 			return nil, err
 		}
-		counts, err := s.repo.TripCountsByPolygon(ctx, input.TargetID, periodStart, endExclusive, s.validStatuses)
+		counts, err := s.repo.EventCountsByPolygon(ctx, input.TargetID, periodStart, endExclusive)
 		if err != nil {
 			return nil, err
 		}
@@ -133,7 +120,7 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 		if err != nil {
 			return nil, err
 		}
-		counts, err := s.repo.TripCountsByContractor(ctx, polygonIDs, periodStart, endExclusive, s.validStatuses)
+		counts, err := s.repo.EventCountsByContractor(ctx, polygonIDs, periodStart, endExclusive)
 		if err != nil {
 			return nil, err
 		}
@@ -153,17 +140,16 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 			if groups[i].ID == uuid.Nil {
 				continue
 			}
-			trips, err := s.repo.ListTripsByPolygon(ctx, input.TargetID, groups[i].ID, periodStart, endExclusive, s.validStatuses)
+			trips, err := s.repo.ListEventsByPolygon(ctx, input.TargetID, groups[i].ID, periodStart, endExclusive)
 			if err != nil {
 				return nil, err
 			}
 			groups[i].Trips = trips
 		case model.ReportModeLandfill:
-			var contractorID *uuid.UUID
-			if groups[i].ID != uuid.Nil {
-				contractorID = &groups[i].ID
+			if groups[i].ID == uuid.Nil {
+				continue
 			}
-			trips, err := s.repo.ListTripsByContractor(ctx, contractorID, landfillPolygonIDs, periodStart, endExclusive, s.validStatuses)
+			trips, err := s.repo.ListEventsByContractor(ctx, groups[i].ID, landfillPolygonIDs, periodStart, endExclusive)
 			if err != nil {
 				return nil, err
 			}

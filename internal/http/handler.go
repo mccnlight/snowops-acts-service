@@ -95,16 +95,14 @@ func (h *Handler) handleError(c *gin.Context, err error) {
     switch {
     case errors.Is(err, service.ErrPermissionDenied):
         c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-    case errors.Is(err, service.ErrInvalidInput):
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-    case errors.Is(err, service.ErrNotFound):
-        c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-    case errors.Is(err, service.ErrNoTrips):
-        c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-    default:
-        h.log.Error().Err(err).Msg("generate report failed")
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-    }
+	case errors.Is(err, service.ErrInvalidInput):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	default:
+		h.log.Error().Err(err).Msg("generate report failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+	}
 }
 
 func parseReportMode(raw string) (model.ReportMode, error) {

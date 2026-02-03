@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -23,16 +22,11 @@ type AuthConfig struct {
 	AccessSecret string
 }
 
-type ActsConfig struct {
-	ValidStatuses   []string
-}
-
 type Config struct {
 	Environment string
 	HTTP        HTTPConfig
 	DB          DBConfig
 	Auth        AuthConfig
-	Acts        ActsConfig
 }
 
 func Load() (*Config, error) {
@@ -62,9 +56,6 @@ func Load() (*Config, error) {
 		Auth: AuthConfig{
 			AccessSecret: v.GetString("JWT_ACCESS_SECRET"),
 		},
-		Acts: ActsConfig{
-			ValidStatuses:   parseList(v.GetString("ACTS_VALID_STATUSES")),
-		},
 	}
 
 	if cfg.Environment == "" {
@@ -76,10 +67,6 @@ func Load() (*Config, error) {
 	if cfg.HTTP.Port == 0 {
 		cfg.HTTP.Port = 7089
 	}
-	if len(cfg.Acts.ValidStatuses) == 0 {
-		cfg.Acts.ValidStatuses = []string{"OK"}
-	}
-
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
@@ -96,18 +83,3 @@ func validate(cfg *Config) error {
 	return nil
 }
 
-func parseList(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	items := strings.Split(raw, ",")
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		item = strings.TrimSpace(item)
-		if item != "" {
-			result = append(result, item)
-		}
-	}
-	return result
-}

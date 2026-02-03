@@ -2,7 +2,6 @@ package repository
 
 import (
     "context"
-    "fmt"
     "strings"
     "time"
 
@@ -89,174 +88,132 @@ func (r *ReportRepository) ListContractors(ctx context.Context) ([]model.TripGro
     return rows, nil
 }
 
-func (r *ReportRepository) TripCountsByPolygon(
-    ctx context.Context,
-    contractorID uuid.UUID,
-    from, to time.Time,
-    statuses []string,
-) ([]model.TripGroup, error) {
-    baseQuery := `
-        SELECT
-            tr.polygon_id AS id,
-            COALESCE(p.name, 'Unknown') AS name,
-            COUNT(*) AS trip_count
-        FROM trips tr
-        JOIN tickets t ON t.id = tr.ticket_id
-        LEFT JOIN polygons p ON p.id = tr.polygon_id
-        WHERE t.contractor_id = ?
-            AND tr.entry_at >= ?
-            AND tr.entry_at < ?
-            AND tr.polygon_id IS NOT NULL
-    `
-    args := []interface{}{contractorID, from, to}
-    baseQuery, args = appendStatusFilter(baseQuery, args, statuses)
-    baseQuery += " GROUP BY tr.polygon_id, p.name ORDER BY name ASC"
-
-    var rows []model.TripGroup
-    if err := r.db.WithContext(ctx).Raw(baseQuery, args...).Scan(&rows).Error; err != nil {
-        return nil, err
-    }
-    return rows, nil
-}
-
-func (r *ReportRepository) TripCountsByContractor(
-    ctx context.Context,
-    polygonIDs []uuid.UUID,
-    from, to time.Time,
-    statuses []string,
-) ([]model.TripGroup, error) {
-    if len(polygonIDs) == 0 {
-        return []model.TripGroup{}, nil
-    }
-
-    baseQuery := `
-        SELECT
-            t.contractor_id AS id,
-            COALESCE(org.name, 'Unknown') AS name,
-            COUNT(*) AS trip_count
-        FROM trips tr
-        JOIN tickets t ON t.id = tr.ticket_id
-        LEFT JOIN organizations org ON org.id = t.contractor_id
-        WHERE tr.polygon_id = ANY(?)
-            AND tr.entry_at >= ?
-            AND tr.entry_at < ?
-    `
-    args := []interface{}{polygonIDs, from, to}
-    baseQuery, args = appendStatusFilter(baseQuery, args, statuses)
-    baseQuery += " GROUP BY t.contractor_id, org.name ORDER BY name ASC"
-
-    var rows []model.TripGroup
-    if err := r.db.WithContext(ctx).Raw(baseQuery, args...).Scan(&rows).Error; err != nil {
-        return nil, err
-    }
-	return rows, nil
-}
-
-func (r *ReportRepository) ListTripsByPolygon(
+func (r *ReportRepository) EventCountsByPolygon(
 	ctx context.Context,
 	contractorID uuid.UUID,
-	polygonID uuid.UUID,
 	from, to time.Time,
-	statuses []string,
-) ([]model.TripDetail, error) {
-	baseQuery := `
+) ([]model.TripGroup, error) {
+	query := `
 		SELECT
-			tr.id,
-			tr.entry_at,
-			tr.exit_at,
-			tr.status,
-			tr.polygon_id,
-			p.name AS polygon_name,
-			t.contractor_id,
-			org.name AS contractor_name,
-			tr.vehicle_plate_number,
-			tr.detected_plate_number,
-			tr.detected_volume_entry,
-			tr.detected_volume_exit,
-			tr.total_volume_m3
-		FROM trips tr
-		JOIN tickets t ON t.id = tr.ticket_id
-		LEFT JOIN polygons p ON p.id = tr.polygon_id
-		LEFT JOIN organizations org ON org.id = t.contractor_id
-		WHERE t.contractor_id = ?
-			AND tr.polygon_id = ?
-			AND tr.entry_at >= ?
-			AND tr.entry_at < ?
+			ae.polygon_id AS id,
+			COALESCE(p.name, 'Unknown') AS name,
+			COUNT(*) AS trip_count
+		FROM anpr_events ae
+		LEFT JOIN polygons p ON p.id = ae.polygon_id
+		WHERE ae.contractor_id = ?
+			AND ae.polygon_id IS NOT NULL
+			AND ae.matched_snow = true
+			AND COALESCE(ae.event_time, ae.created_at) >= ?
+			AND COALESCE(ae.event_time, ae.created_at) < ?
+		GROUP BY ae.polygon_id, p.name
+		ORDER BY name ASC
 	`
-	args := []interface{}{contractorID, polygonID, from, to}
-	baseQuery, args = appendStatusFilter(baseQuery, args, statuses)
-	baseQuery += " ORDER BY tr.entry_at ASC"
 
-	var rows []model.TripDetail
-	if err := r.db.WithContext(ctx).Raw(baseQuery, args...).Scan(&rows).Error; err != nil {
+	var rows []model.TripGroup
+	if err := r.db.WithContext(ctx).Raw(query, contractorID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
 }
 
-func (r *ReportRepository) ListTripsByContractor(
+func (r *ReportRepository) EventCountsByContractor(
 	ctx context.Context,
-	contractorID *uuid.UUID,
 	polygonIDs []uuid.UUID,
 	from, to time.Time,
-	statuses []string,
+) ([]model.TripGroup, error) {
+	if len(polygonIDs) == 0 {
+		return []model.TripGroup{}, nil
+	}
+
+	query := `
+		SELECT
+			ae.contractor_id AS id,
+			COALESCE(org.name, 'Unknown') AS name,
+			COUNT(*) AS trip_count
+		FROM anpr_events ae
+		LEFT JOIN organizations org ON org.id = ae.contractor_id
+		WHERE ae.polygon_id = ANY(?)
+			AND ae.contractor_id IS NOT NULL
+			AND ae.matched_snow = true
+			AND COALESCE(ae.event_time, ae.created_at) >= ?
+			AND COALESCE(ae.event_time, ae.created_at) < ?
+		GROUP BY ae.contractor_id, org.name
+		ORDER BY name ASC
+	`
+
+	var rows []model.TripGroup
+	if err := r.db.WithContext(ctx).Raw(query, polygonIDs, from, to).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r *ReportRepository) ListEventsByPolygon(
+	ctx context.Context,
+	contractorID uuid.UUID,
+	polygonID uuid.UUID,
+	from, to time.Time,
+) ([]model.TripDetail, error) {
+	query := `
+		SELECT
+			COALESCE(ae.event_time, ae.created_at) AS event_time,
+			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
+			ae.polygon_id,
+			p.name AS polygon_name,
+			ae.contractor_id,
+			org.name AS contractor_name,
+			ae.snow_volume_m3
+		FROM anpr_events ae
+		LEFT JOIN polygons p ON p.id = ae.polygon_id
+		LEFT JOIN organizations org ON org.id = ae.contractor_id
+		WHERE ae.contractor_id = ?
+			AND ae.polygon_id = ?
+			AND ae.matched_snow = true
+			AND COALESCE(ae.event_time, ae.created_at) >= ?
+			AND COALESCE(ae.event_time, ae.created_at) < ?
+		ORDER BY event_time ASC
+	`
+
+	var rows []model.TripDetail
+	if err := r.db.WithContext(ctx).Raw(query, contractorID, polygonID, from, to).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r *ReportRepository) ListEventsByContractor(
+	ctx context.Context,
+	contractorID uuid.UUID,
+	polygonIDs []uuid.UUID,
+	from, to time.Time,
 ) ([]model.TripDetail, error) {
 	if len(polygonIDs) == 0 {
 		return []model.TripDetail{}, nil
 	}
 
-	baseQuery := `
+	query := `
 		SELECT
-			tr.id,
-			tr.entry_at,
-			tr.exit_at,
-			tr.status,
-			tr.polygon_id,
+			COALESCE(ae.event_time, ae.created_at) AS event_time,
+			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
+			ae.polygon_id,
 			p.name AS polygon_name,
-			t.contractor_id,
+			ae.contractor_id,
 			org.name AS contractor_name,
-			tr.vehicle_plate_number,
-			tr.detected_plate_number,
-			tr.detected_volume_entry,
-			tr.detected_volume_exit,
-			tr.total_volume_m3
-		FROM trips tr
-		JOIN tickets t ON t.id = tr.ticket_id
-		LEFT JOIN polygons p ON p.id = tr.polygon_id
-		LEFT JOIN organizations org ON org.id = t.contractor_id
-		WHERE tr.polygon_id = ANY(?)
-			AND tr.entry_at >= ?
-			AND tr.entry_at < ?
+			ae.snow_volume_m3
+		FROM anpr_events ae
+		LEFT JOIN polygons p ON p.id = ae.polygon_id
+		LEFT JOIN organizations org ON org.id = ae.contractor_id
+		WHERE ae.polygon_id = ANY(?)
+			AND ae.contractor_id = ?
+			AND ae.matched_snow = true
+			AND COALESCE(ae.event_time, ae.created_at) >= ?
+			AND COALESCE(ae.event_time, ae.created_at) < ?
+		ORDER BY event_time ASC
 	`
-	args := []interface{}{polygonIDs, from, to}
-	if contractorID == nil {
-		baseQuery += " AND t.contractor_id IS NULL"
-	} else {
-		baseQuery += " AND t.contractor_id = ?"
-		args = append(args, *contractorID)
-	}
-	baseQuery, args = appendStatusFilter(baseQuery, args, statuses)
-	baseQuery += " ORDER BY tr.entry_at ASC"
 
 	var rows []model.TripDetail
-	if err := r.db.WithContext(ctx).Raw(baseQuery, args...).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(query, polygonIDs, contractorID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
-}
-
-func appendStatusFilter(baseQuery string, args []interface{}, statuses []string) (string, []interface{}) {
-    if len(statuses) == 0 {
-        return baseQuery, args
-    }
-
-    placeholders := make([]string, len(statuses))
-    for i := range statuses {
-        placeholders[i] = "?"
-    }
-    baseQuery += fmt.Sprintf(" AND tr.status IN (%s)", strings.Join(placeholders, ","))
-    for _, status := range statuses {
-        args = append(args, status)
-    }
-    return baseQuery, args
 }

@@ -57,35 +57,30 @@ func (g *Generator) writeSummary(file *excelize.File, sheet string, report model
 	set("B1", modeLabel)
 	set("A2", "Target")
 	set("B2", report.Target.Name)
-	set("A3", "Target ID")
-	set("B3", report.Target.ID.String())
-	set("A4", "Period Start")
-	set("B4", formatDate(report.PeriodStart))
-	set("A5", "Period End")
-	set("B5", formatDate(report.PeriodEnd))
-	set("A6", "Total Trips")
-	set("B6", report.TotalTrips)
-	set("A7", "Total Volume M3")
-	set("B7", formatFloatValue(totalVolume, true))
+	set("A3", "Period Start")
+	set("B3", formatDate(report.PeriodStart))
+	set("A4", "Period End")
+	set("B4", formatDate(report.PeriodEnd))
+	set("A5", "Total Trips")
+	set("B5", report.TotalTrips)
+	set("A6", "Total Volume M3")
+	set("B6", formatFloatValue(totalVolume, true))
 
-	tableRow := 9
-	set(fmt.Sprintf("A%d", tableRow), "ID")
-	set(fmt.Sprintf("B%d", tableRow), groupLabel)
-	set(fmt.Sprintf("C%d", tableRow), "Trip Count")
-	set(fmt.Sprintf("D%d", tableRow), "Volume M3")
+	tableRow := 8
+	set(fmt.Sprintf("A%d", tableRow), groupLabel)
+	set(fmt.Sprintf("B%d", tableRow), "Trip Count")
+	set(fmt.Sprintf("C%d", tableRow), "Volume M3")
 
 	for i, group := range report.Groups {
 		row := tableRow + 1 + i
-		set(fmt.Sprintf("A%d", row), group.ID.String())
-		set(fmt.Sprintf("B%d", row), group.Name)
-		set(fmt.Sprintf("C%d", row), group.TripCount)
-		set(fmt.Sprintf("D%d", row), formatFloatValue(sumGroupVolume(report.Mode, group), true))
+		set(fmt.Sprintf("A%d", row), group.Name)
+		set(fmt.Sprintf("B%d", row), group.TripCount)
+		set(fmt.Sprintf("C%d", row), formatFloatValue(sumGroupVolume(report.Mode, group), true))
 	}
 
-	_ = file.SetColWidth(sheet, "A", "A", 38)
-	_ = file.SetColWidth(sheet, "B", "B", 45)
+	_ = file.SetColWidth(sheet, "A", "A", 45)
+	_ = file.SetColWidth(sheet, "B", "B", 16)
 	_ = file.SetColWidth(sheet, "C", "C", 16)
-	_ = file.SetColWidth(sheet, "D", "D", 16)
 	return nil
 }
 
@@ -101,35 +96,23 @@ func (g *Generator) writeDetail(file *excelize.File, sheet string, report model.
 	set("B1", modeLabel)
 	set("A2", "Target")
 	set("B2", report.Target.Name)
-	set("A3", "Target ID")
-	set("B3", report.Target.ID.String())
-	set("A4", groupLabel)
-	set("B4", group.Name)
-	set("A5", "Group ID")
-	set("B5", group.ID.String())
-	set("A6", "Period Start")
-	set("B6", formatDate(report.PeriodStart))
-	set("A7", "Period End")
-	set("B7", formatDate(report.PeriodEnd))
-	set("A8", "Trip Count")
-	set("B8", group.TripCount)
-	set("A9", "Total Volume M3")
-	set("B9", formatFloatValue(groupVolume, true))
+	set("A3", groupLabel)
+	set("B3", group.Name)
+	set("A4", "Period Start")
+	set("B4", formatDate(report.PeriodStart))
+	set("A5", "Period End")
+	set("B5", formatDate(report.PeriodEnd))
+	set("A6", "Trip Count")
+	set("B6", group.TripCount)
+	set("A7", "Total Volume M3")
+	set("B7", formatFloatValue(groupVolume, true))
 
-	tableRow := 11
+	tableRow := 9
 	headers := []string{
-		"Trip ID",
-		"Entry At",
-		"Exit At",
-		"Status",
-		"Polygon ID",
-		"Polygon Name",
-		"Contractor ID",
-		"Contractor Name",
-		"Vehicle Plate",
-		"Detected Plate",
-		"Volume Entry",
-		"Volume Exit",
+		"Date",
+		"Plate",
+		"Polygon",
+		"Contractor",
 		"Volume M3",
 	}
 	for i, header := range headers {
@@ -139,28 +122,17 @@ func (g *Generator) writeDetail(file *excelize.File, sheet string, report model.
 
 	for i, trip := range group.Trips {
 		row := tableRow + 1 + i
-		set(fmt.Sprintf("A%d", row), trip.ID.String())
-		set(fmt.Sprintf("B%d", row), formatDateTime(trip.EntryAt))
-		set(fmt.Sprintf("C%d", row), formatOptionalTime(trip.ExitAt))
-		set(fmt.Sprintf("D%d", row), trip.Status)
-		set(fmt.Sprintf("E%d", row), formatUUID(trip.PolygonID))
-		set(fmt.Sprintf("F%d", row), formatString(trip.PolygonName))
-		set(fmt.Sprintf("G%d", row), formatUUID(trip.ContractorID))
-		set(fmt.Sprintf("H%d", row), formatString(trip.ContractorName))
-		set(fmt.Sprintf("I%d", row), formatString(trip.VehiclePlateNumber))
-		set(fmt.Sprintf("J%d", row), formatString(trip.DetectedPlateNumber))
-		set(fmt.Sprintf("K%d", row), formatFloat(trip.DetectedVolumeEntry))
-		set(fmt.Sprintf("L%d", row), formatFloat(trip.DetectedVolumeExit))
-		set(fmt.Sprintf("M%d", row), formatFloatValue(computeTripVolume(report.Mode, trip)))
+		set(fmt.Sprintf("A%d", row), formatDateTime(trip.EventTime))
+		set(fmt.Sprintf("B%d", row), formatString(trip.Plate))
+		set(fmt.Sprintf("C%d", row), formatString(trip.PolygonName))
+		set(fmt.Sprintf("D%d", row), formatString(trip.ContractorName))
+		set(fmt.Sprintf("E%d", row), formatFloat(trip.SnowVolumeM3))
 	}
 
-	_ = file.SetColWidth(sheet, "A", "A", 36)
-	_ = file.SetColWidth(sheet, "B", "C", 20)
-	_ = file.SetColWidth(sheet, "D", "D", 14)
-	_ = file.SetColWidth(sheet, "E", "G", 36)
-	_ = file.SetColWidth(sheet, "F", "H", 28)
-	_ = file.SetColWidth(sheet, "I", "J", 16)
-	_ = file.SetColWidth(sheet, "K", "M", 14)
+	_ = file.SetColWidth(sheet, "A", "A", 20)
+	_ = file.SetColWidth(sheet, "B", "B", 16)
+	_ = file.SetColWidth(sheet, "C", "D", 32)
+	_ = file.SetColWidth(sheet, "E", "E", 14)
 	return nil
 }
 
@@ -240,20 +212,6 @@ func formatDateTime(t time.Time) string {
 	return t.Format("2006-01-02 15:04:05")
 }
 
-func formatOptionalTime(t *time.Time) string {
-	if t == nil {
-		return ""
-	}
-	return formatDateTime(*t)
-}
-
-func formatUUID(id *uuid.UUID) string {
-	if id == nil || *id == uuid.Nil {
-		return ""
-	}
-	return id.String()
-}
-
 func formatString(value *string) string {
 	if value == nil {
 		return ""
@@ -294,14 +252,8 @@ func sumReportVolume(report model.ActReport) float64 {
 }
 
 func computeTripVolume(_ model.ReportMode, trip model.TripDetail) (float64, bool) {
-	if trip.TotalVolumeM3 != nil {
-		return *trip.TotalVolumeM3, true
+	if trip.SnowVolumeM3 == nil {
+		return 0, false
 	}
-	if trip.DetectedVolumeEntry != nil {
-		return *trip.DetectedVolumeEntry, true
-	}
-	if trip.DetectedVolumeExit != nil {
-		return *trip.DetectedVolumeExit, true
-	}
-	return 0, false
+	return *trip.SnowVolumeM3, true
 }

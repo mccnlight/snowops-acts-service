@@ -11,6 +11,7 @@
 - Excel содержит несколько листов:
   - `Summary`: итоги по всем рейсам + сводка по группам.
   - по одному листу на каждую группу (полигон или подрядчик).
+- В листах по группам только ключевые поля: дата, номер машины, полигон, подрядчик, объём снега.
 - Даже если рейсов нет — акт всё равно оформляется (листы есть, строки пустые).
 - Только чтение БД: без записи и без отдельных таблиц актов.
 
@@ -23,7 +24,6 @@
 | `DB_DSN` | строка подключения Postgres | `postgres://postgres:postgres@localhost:5450/snowops_acts?sslmode=disable` |
 | `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS`, `DB_CONN_MAX_LIFETIME` | пул соединений | `20`, `10`, `1h` |
 | `JWT_ACCESS_SECRET` | секрет проверки JWT | обязательно |
-| `ACTS_VALID_STATUSES` | статусы `trips.status`, которые включаются в акт | `OK` |
 
 ## Источники данных
 
@@ -31,16 +31,13 @@
 
 - `organizations`: `id`, `name`, `type`, `bin`, `head_full_name`, `address`, `phone`
 - `polygons`: `id`, `name` *(если есть `organization_id`, используется для полигона; если нет — берутся все полигоны)*
-- `tickets`: `id`, `contractor_id`
-- `trips`:  
-  `id`, `ticket_id`, `polygon_id`, `entry_at`, `exit_at`, `status`,  
-  `vehicle_plate_number`, `detected_plate_number`,  
-  `detected_volume_entry`, `detected_volume_exit`, `total_volume_m3`
+- `anpr_events` (только `matched_snow = true`):  
+  `event_time`, `created_at`, `normalized_plate`, `raw_plate`,  
+  `polygon_id`, `contractor_id`, `snow_volume_m3`
 
-**Объём (Volume M3):**
-1) если есть `total_volume_m3` — используем его;  
-2) иначе `detected_volume_entry`;  
-3) иначе `detected_volume_exit`.
+**Время события:** `event_time`, если пусто — берётся `created_at`.  
+**Номер машины:** `normalized_plate`, если пусто — `raw_plate`.  
+**Объём:** `snow_volume_m3`.
 
 ## API
 
@@ -96,7 +93,6 @@ go run ./cmd/acts-service
 
 - `DB_DSN` должен указывать на основную SnowOps базу.
 - `JWT_ACCESS_SECRET` должен совпадать с auth‑сервисом.
-- `ACTS_VALID_STATUSES` — список статусов для отчёта.
 
 ## Пример запроса (PowerShell)
 

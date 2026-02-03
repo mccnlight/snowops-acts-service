@@ -21,19 +21,13 @@ type TripGroup struct {
 }
 
 type TripDetail struct {
-	ID                  uuid.UUID
-	EntryAt             time.Time
-	ExitAt              *time.Time
-	Status              string
-	PolygonID           *uuid.UUID
-	PolygonName         *string
-	ContractorID        *uuid.UUID
-	ContractorName      *string
-	VehiclePlateNumber  *string
-	DetectedPlateNumber *string
-	DetectedVolumeEntry *float64
-	DetectedVolumeExit  *float64
-	TotalVolumeM3       *float64
+	EventTime      time.Time
+	Plate          *string
+	PolygonID      *uuid.UUID
+	PolygonName    *string
+	ContractorID   *uuid.UUID
+	ContractorName *string
+	SnowVolumeM3   *float64
 }
 
 type ActReport struct {
