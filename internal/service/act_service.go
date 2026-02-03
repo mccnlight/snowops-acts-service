@@ -98,24 +98,21 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
         if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsLandfill()) {
             return nil, ErrPermissionDenied
         }
-        if input.Principal.IsLandfill() && input.Principal.OrgID != input.TargetID {
-            return nil, ErrPermissionDenied
-        }
 
-        org, err := s.repo.GetOrganization(ctx, input.TargetID)
+        polygonID, polygonName, err := s.repo.GetPolygon(ctx, input.TargetID)
         if err != nil {
             if err == gorm.ErrRecordNotFound {
                 return nil, ErrNotFound
             }
             return nil, err
         }
-        target = org
+        target = &model.Organization{
+            ID:   polygonID,
+            Name: polygonName,
+            Type: "LANDFILL",
+        }
 
-		polygonIDs, err := s.repo.ListLandfillPolygonIDs(ctx, input.TargetID)
-		if err != nil {
-			return nil, err
-		}
-		landfillPolygonIDs = polygonIDs
+		landfillPolygonIDs = []uuid.UUID{polygonID}
 		contractors, err := s.repo.ListContractors(ctx)
 		if err != nil {
 			return nil, err

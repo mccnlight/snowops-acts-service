@@ -2,7 +2,6 @@ package repository
 
 import (
     "context"
-    "strings"
     "time"
 
     "github.com/google/uuid"
@@ -14,6 +13,15 @@ import (
 type ReportRepository struct {
     db *gorm.DB
 }
+
+const cameraPolygonNameExpr = `
+    CASE LOWER(ae.camera_id)
+        WHEN 'shahovskoye' THEN 'Шаховское'
+        WHEN 'yakor' THEN 'Якорь'
+        WHEN 'solnechniy' THEN 'Солнечный'
+        ELSE NULL
+    END
+`
 
 func NewReportRepository(db *gorm.DB) *ReportRepository {
     return &ReportRepository{db: db}
@@ -35,32 +43,23 @@ func (r *ReportRepository) GetOrganization(ctx context.Context, id uuid.UUID) (*
     return &org, nil
 }
 
-func (r *ReportRepository) ListLandfillPolygonIDs(ctx context.Context, landfillID uuid.UUID) ([]uuid.UUID, error) {
-    var polygonIDs []uuid.UUID
-    err := r.db.WithContext(ctx).Raw(`
-        SELECT id
+func (r *ReportRepository) GetPolygon(ctx context.Context, id uuid.UUID) (uuid.UUID, string, error) {
+	var row struct {
+		ID   uuid.UUID
+		Name string
+	}
+	if err := r.db.WithContext(ctx).Raw(`
+        SELECT id, name
         FROM polygons
-        WHERE organization_id = ?
-        ORDER BY name ASC
-    `, landfillID).Scan(&polygonIDs).Error
-    if err == nil {
-        return polygonIDs, nil
-    }
-
-    errLower := strings.ToLower(err.Error())
-    if !strings.Contains(errLower, "organization_id") {
-        return nil, err
-    }
-
-    polygonIDs = nil
-    if err := r.db.WithContext(ctx).Raw(`
-        SELECT id
-        FROM polygons
-        ORDER BY name ASC
-    `).Scan(&polygonIDs).Error; err != nil {
-        return nil, err
-    }
-    return polygonIDs, nil
+        WHERE id = ?
+        LIMIT 1
+    `, id).Scan(&row).Error; err != nil {
+		return uuid.Nil, "", err
+	}
+	if row.ID == uuid.Nil {
+		return uuid.Nil, "", gorm.ErrRecordNotFound
+	}
+	return row.ID, row.Name, nil
 }
 
 func (r *ReportRepository) ListPolygons(ctx context.Context) ([]model.TripGroup, error) {
@@ -81,6 +80,7 @@ func (r *ReportRepository) ListContractors(ctx context.Context) ([]model.TripGro
         SELECT id, name, 0 AS trip_count
         FROM organizations
         WHERE type = 'CONTRACTOR'
+          AND name NOT ILIKE 'TEST%'
         ORDER BY name ASC
     `).Scan(&rows).Error; err != nil {
         return nil, err
@@ -95,20 +95,18 @@ func (r *ReportRepository) EventCountsByPolygon(
 ) ([]model.TripGroup, error) {
 	query := `
 		SELECT
-			ae.polygon_id AS id,
-			COALESCE(p.name, 'Unknown') AS name,
+			p.id AS id,
+			p.name AS name,
 			COUNT(*) AS trip_count
 		FROM anpr_events ae
-		LEFT JOIN polygons p ON p.id = ae.polygon_id
+		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
 		WHERE ae.contractor_id = ?
-			AND ae.polygon_id IS NOT NULL
 			AND ae.matched_snow = true
-			AND COALESCE(ae.event_time, ae.created_at) >= ?
-			AND COALESCE(ae.event_time, ae.created_at) < ?
-		GROUP BY ae.polygon_id, p.name
-		ORDER BY name ASC
+			AND ae.created_at >= ?
+			AND ae.created_at < ?
+		GROUP BY p.id, p.name
+		ORDER BY p.name ASC
 	`
-
 	var rows []model.TripGroup
 	if err := r.db.WithContext(ctx).Raw(query, contractorID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
@@ -128,15 +126,17 @@ func (r *ReportRepository) EventCountsByContractor(
 	query := `
 		SELECT
 			ae.contractor_id AS id,
-			COALESCE(org.name, 'Unknown') AS name,
+			org.name AS name,
 			COUNT(*) AS trip_count
 		FROM anpr_events ae
-		LEFT JOIN organizations org ON org.id = ae.contractor_id
-		WHERE ae.polygon_id = ANY(?)
-			AND ae.contractor_id IS NOT NULL
+		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
+		JOIN organizations org ON org.id = ae.contractor_id
+		WHERE p.id = ANY(?)
+			AND org.type = 'CONTRACTOR'
+			AND org.name NOT ILIKE 'TEST%'
 			AND ae.matched_snow = true
-			AND COALESCE(ae.event_time, ae.created_at) >= ?
-			AND COALESCE(ae.event_time, ae.created_at) < ?
+			AND ae.created_at >= ?
+			AND ae.created_at < ?
 		GROUP BY ae.contractor_id, org.name
 		ORDER BY name ASC
 	`
@@ -156,21 +156,21 @@ func (r *ReportRepository) ListEventsByPolygon(
 ) ([]model.TripDetail, error) {
 	query := `
 		SELECT
-			COALESCE(ae.event_time, ae.created_at) AS event_time,
+			ae.created_at AS event_time,
 			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
-			ae.polygon_id,
+			p.id AS polygon_id,
 			p.name AS polygon_name,
 			ae.contractor_id,
 			org.name AS contractor_name,
 			ae.snow_volume_m3
 		FROM anpr_events ae
-		LEFT JOIN polygons p ON p.id = ae.polygon_id
+		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
 		LEFT JOIN organizations org ON org.id = ae.contractor_id
 		WHERE ae.contractor_id = ?
-			AND ae.polygon_id = ?
+			AND p.id = ?
 			AND ae.matched_snow = true
-			AND COALESCE(ae.event_time, ae.created_at) >= ?
-			AND COALESCE(ae.event_time, ae.created_at) < ?
+			AND ae.created_at >= ?
+			AND ae.created_at < ?
 		ORDER BY event_time ASC
 	`
 
@@ -193,21 +193,23 @@ func (r *ReportRepository) ListEventsByContractor(
 
 	query := `
 		SELECT
-			COALESCE(ae.event_time, ae.created_at) AS event_time,
+			ae.created_at AS event_time,
 			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
-			ae.polygon_id,
+			p.id AS polygon_id,
 			p.name AS polygon_name,
 			ae.contractor_id,
 			org.name AS contractor_name,
 			ae.snow_volume_m3
 		FROM anpr_events ae
-		LEFT JOIN polygons p ON p.id = ae.polygon_id
-		LEFT JOIN organizations org ON org.id = ae.contractor_id
-		WHERE ae.polygon_id = ANY(?)
+		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
+		JOIN organizations org ON org.id = ae.contractor_id
+		WHERE p.id = ANY(?)
 			AND ae.contractor_id = ?
+			AND org.type = 'CONTRACTOR'
+			AND org.name NOT ILIKE 'TEST%'
 			AND ae.matched_snow = true
-			AND COALESCE(ae.event_time, ae.created_at) >= ?
-			AND COALESCE(ae.event_time, ae.created_at) < ?
+			AND ae.created_at >= ?
+			AND ae.created_at < ?
 		ORDER BY event_time ASC
 	`
 

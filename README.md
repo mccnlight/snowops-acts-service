@@ -1,13 +1,13 @@
-# Snowops Acts Service
+﻿# Snowops Acts Service
 
-Сервис формирует Excel‑акты вывоза снега. Фронтенд вызывает один эндпоинт и получает `.xlsx` файл.
+Сервис формирует Excel-акты вывоза снега. Фронтенд вызывает один эндпоинт и получает `.xlsx` файл.
 
 ## Что делает сервис
 
 - Формирует акт за период (`period_start`..`period_end`).
 - Два режима:
   - `contractor`: акт по подрядчику, группировка по полигонам.
-  - `landfill`: акт по полигону (организации‑полигону), группировка по подрядчикам.
+  - `landfill`: акт по полигону, группировка по подрядчикам.
 - Excel содержит несколько листов:
   - `Summary`: итоги по всем рейсам + сводка по группам.
   - по одному листу на каждую группу (полигон или подрядчик).
@@ -30,14 +30,22 @@
 Сервис читает из:
 
 - `organizations`: `id`, `name`, `type`, `bin`, `head_full_name`, `address`, `phone`
-- `polygons`: `id`, `name` *(если есть `organization_id`, используется для полигона; если нет — берутся все полигоны)*
-- `anpr_events` (только `matched_snow = true`):  
-  `event_time`, `created_at`, `normalized_plate`, `raw_plate`,  
+- `polygons`: `id`, `name` (справочник полигонов)
+- `anpr_events` (только `matched_snow = true`):
+  `event_time`, `created_at`, `normalized_plate`, `raw_plate`,
   `polygon_id`, `contractor_id`, `snow_volume_m3`
 
-**Время события:** `event_time`, если пусто — берётся `created_at`.  
-**Номер машины:** `normalized_plate`, если пусто — `raw_plate`.  
+**Время события:** используется `created_at`.
+**Номер машины:** `normalized_plate`, если пусто — `raw_plate`.
 **Объём:** `snow_volume_m3`.
+
+**Привязка к полигону:** берётся из `camera_id` в `anpr_events` (таблица `cameras` пустая).
+Маппинг:
+- `shahovskoye` → `Шаховское`
+- `yakor` → `Якорь`
+- `solnechniy` → `Солнечный`
+
+**Фильтр организаций подрядчиков:** исключаются `type = LANDFILL` и имена, начинающиеся на `TEST`.
 
 ## API
 
@@ -60,13 +68,13 @@ Exports an Excel report.
 **Поля:**
 - `mode`: `landfill` или `contractor`.
 - `target_id`:
-  - `landfill`: `organizations.id` организации‑полигона.
+  - `landfill`: `polygons.id` полигона.
   - `contractor`: `organizations.id` подрядчика.
 - `period_start`, `period_end`: ISO (`YYYY-MM-DD`) или RFC3339.
 
 **Права доступа:**
 - `contractor`: `AKIMAT_*`, `KGU_*`, `CONTRACTOR_ADMIN` (только свой `org_id`).
-- `landfill`: `AKIMAT_*`, `KGU_*`, `LANDFILL_*` (только свой `org_id`).
+- `landfill`: `AKIMAT_*`, `KGU_*`, `LANDFILL_*`.
 
 **Ответ:**
 - `200` и файл Excel (`Content-Disposition: attachment; filename="acts-...xlsx"`).
@@ -92,7 +100,7 @@ go run ./cmd/acts-service
 ## Render (деплой)
 
 - `DB_DSN` должен указывать на основную SnowOps базу.
-- `JWT_ACCESS_SECRET` должен совпадать с auth‑сервисом.
+- `JWT_ACCESS_SECRET` должен совпадать с auth-сервисом.
 
 ## Пример запроса (PowerShell)
 
