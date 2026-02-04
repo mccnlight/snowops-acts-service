@@ -1,137 +1,118 @@
 ﻿# Snowops Acts Service
 
-Сервис формирует Excel-акты вывоза снега. Фронтенд вызывает один эндпоинт и получает `.xlsx` файл.
+Сервис формирует Excel-акты по ивентам вывоза снега. Для фронтенда используется один эндпоинт: `POST /acts/export`.
 
-## Что делает сервис
+## Быстрый старт для фронтенда
 
-- Формирует акт за период (`period_start`..`period_end`).
-- Два режима:
-  - `contractor`: акт по подрядчику, группировка по полигонам.
-  - `landfill`: акт по полигону, группировка по подрядчикам.
-- Excel содержит несколько листов:
-  - `Summary`: итоги по всем рейсам + сводка по группам.
-  - по одному листу на каждую группу (полигон или подрядчик).
-- В листах по группам только ключевые поля: дата, номер машины, полигон, подрядчик, объём снега.
-- Даже если рейсов нет — акт всё равно оформляется (листы есть, строки пустые).
-- Только чтение БД: без записи и без отдельных таблиц актов.
+1. Получить JWT в auth-сервисе.
+2. Отправить `POST /acts/export` с `mode`, `target_id`, `period_start`, `period_end`.
+3. Принять ответ как бинарный файл (`.xlsx`) и сохранить/скачать.
 
-## Конфигурация
-
-| Переменная | Описание | По умолчанию |
-| --- | --- | --- |
-| `APP_ENV` | `development` / `production` | `development` |
-| `HTTP_HOST`, `HTTP_PORT` | адрес/порт HTTP | `0.0.0.0`, `7093` |
-| `DB_DSN` | строка подключения Postgres | `postgres://postgres:postgres@localhost:5450/snowops_acts?sslmode=disable` |
-| `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS`, `DB_CONN_MAX_LIFETIME` | пул соединений | `20`, `10`, `1h` |
-| `JWT_ACCESS_SECRET` | секрет проверки JWT | обязательно |
-
-## Источники данных
-
-Сервис читает из:
-
-- `organizations`: `id`, `name`, `type`, `bin`, `head_full_name`, `address`, `phone`
-- `polygons`: `id`, `name` (справочник полигонов)
-- `anpr_events` (только `matched_snow = true`):
-  `event_time`, `created_at`, `normalized_plate`, `raw_plate`,
-  `polygon_id`, `contractor_id`, `snow_volume_m3`
-
-**Время события:** используется `event_time`.
-**Номер машины:** `normalized_plate`, если пусто — `raw_plate`.
-**Объём:** `snow_volume_m3`.
-
-**Привязка к полигону:** берётся из `camera_id` в `anpr_events` (таблица `cameras` пустая).
-Маппинг:
-- `shahovskoye` → `Шаховское`
-- `yakor` → `Якорь`
-- `solnechniy` → `Солнечный`
-
-**Фильтр организаций подрядчиков:** исключаются `type = LANDFILL` и имена, начинающиеся на `TEST`.
-
-## API
-
-Все эндпоинты требуют `Authorization: Bearer <jwt>`.
+## Эндпоинт
 
 ### `POST /acts/export`
 
-Exports an Excel report.
+- Заголовки:
+  - `Authorization: Bearer <jwt>`
+  - `Content-Type: application/json`
+- Тело запроса:
 
-**Запрос (JSON):**
 ```json
 {
-  "mode": "landfill",
+  "mode": "contractor",
   "target_id": "UUID",
   "period_start": "2025-12-01",
   "period_end": "2026-02-28"
 }
 ```
 
-**Поля:**
-- `mode`: `landfill` или `contractor`.
+## Параметры
+
+- `mode`:
+  - `contractor` — акт по подрядчику, группировка по полигонам (landfill).
+  - `landfill` — акт по полигону, группировка по подрядчикам.
 - `target_id`:
-  - `landfill`: `polygons.id` полигона.
-  - `contractor`: `organizations.id` подрядчика.
-- `period_start`, `period_end`: ISO (`YYYY-MM-DD`) или RFC3339.
+  - для `contractor`: `organizations.id` подрядчика (`type = CONTRACTOR`)
+  - для `landfill`: `organizations.id` полигона (`type = LANDFILL`)
+- `period_start`, `period_end`:
+  - даты периода, поддерживаются `YYYY-MM-DD` и RFC3339.
 
-**Права доступа:**
-- `contractor`: `AKIMAT_*`, `KGU_*`, `CONTRACTOR_ADMIN` (только свой `org_id`).
-- `landfill`: `AKIMAT_*`, `KGU_*`, `LANDFILL_*`.
+## Что приходит в ответ
 
-**Ответ:**
-- `200` и файл Excel (`Content-Disposition: attachment; filename="acts-...xlsx"`).
+- HTTP `200`
+- `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+- `Content-Disposition: attachment; filename="acts-...xlsx"`
+- Тело ответа — бинарный Excel файл.
 
-**Ошибки:**
-- `400` некорректные входные данные.
-- `403` нет прав.
-- `404` организация не найдена.
+## Структура Excel
 
-## Локальный запуск
+- Лист 1: `Сводка`
+  - тип отчета, организация, период, общее количество рейсов, общий объем снега
+  - таблица по группам (количество рейсов и объем)
+- Остальные листы: по каждой группе
+  - для `contractor`: по каждому полигону
+  - для `landfill`: по каждому подрядчику
+  - строки ивентов: дата, номер машины, полигон, подрядчик, объем снега
 
-```bash
-cd deploy
-docker compose up -d
+Даже если данных нет, файл все равно формируется: листы остаются, значения будут нулевые/пустые.
 
-cd ..
-APP_ENV=development \
-DB_DSN="postgres://postgres:postgres@localhost:5450/snowops_acts?sslmode=disable" \
-JWT_ACCESS_SECRET="dev-secret" \
-go run ./cmd/acts-service
+## Источник данных и правила
+
+Сервис читает из `anpr_events` и `organizations`.
+
+- учитываются только `matched_snow = true`
+- период фильтруется по `event_time`
+- полигон определяется через `camera_id` в `anpr_events`:
+  - `shahovskoye` -> `Шаховское`
+  - `yakor` -> `Якорь`
+  - `solnechniy` -> `Солнечный`
+- подрядчики берутся из `organizations` (`type = CONTRACTOR`), тестовые (`name ILIKE 'TEST%'`) исключаются
+
+## Ошибки API
+
+- `400` — некорректные входные данные
+- `401` — нет/невалидный токен
+- `403` — нет прав
+- `404` — организация не найдена
+- `500` — внутренняя ошибка
+
+## Пример (fetch)
+
+```js
+const response = await fetch('https://snowops-acts-service.onrender.com/acts/export', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    mode: 'landfill',
+    target_id: landfillOrgId,
+    period_start: '2026-02-01',
+    period_end: '2026-02-04',
+  }),
+});
+
+if (!response.ok) {
+  const text = await response.text();
+  throw new Error(`Export failed: ${response.status} ${text}`);
+}
+
+const blob = await response.blob();
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = 'acts.xlsx';
+a.click();
+URL.revokeObjectURL(url);
 ```
 
-## Render (деплой)
+## Конфигурация сервиса
 
-- `DB_DSN` должен указывать на основную SnowOps базу.
-- `JWT_ACCESS_SECRET` должен совпадать с auth-сервисом.
-
-## Пример запроса (PowerShell)
-
-```powershell
-$body = @{
-  mode = "contractor"
-  target_id = "UUID"
-  period_start = "2025-12-01"
-  period_end = "2026-02-28"
-} | ConvertTo-Json
-
-Invoke-WebRequest `
-  -Uri "https://snowops-acts-service.onrender.com/acts/export" `
-  -Method POST `
-  -Headers @{ Authorization = "Bearer <jwt>"; "Content-Type" = "application/json" } `
-  -Body $body `
-  -OutFile ".\\acts.xlsx" `
-  -UseBasicParsing
-```
-
-## Пример запроса (curl)
-
-```bash
-curl -L -X POST "https://snowops-acts-service.onrender.com/acts/export" \
-  -H "Authorization: Bearer <jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mode": "contractor",
-    "target_id": "UUID",
-    "period_start": "2025-12-01",
-    "period_end": "2026-02-28"
-  }' \
-  -o acts.xlsx
-```
+| Переменная | Описание |
+| --- | --- |
+| `APP_ENV` | окружение (`development` / `production`) |
+| `HTTP_HOST`, `HTTP_PORT` | адрес и порт HTTP |
+| `DB_DSN` | строка подключения к Postgres |
+| `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS`, `DB_CONN_MAX_LIFETIME` | настройки пула БД |
+| `JWT_ACCESS_SECRET` | секрет проверки JWT (должен совпадать с auth-сервисом) |
