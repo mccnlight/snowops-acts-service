@@ -1,112 +1,98 @@
-package repository
+﻿package repository
 
 import (
-    "context"
-    "time"
+	"context"
+	"time"
 
-    "github.com/google/uuid"
-    "gorm.io/gorm"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 
-    "github.com/nurpe/snowops-acts/internal/model"
+	"github.com/nurpe/snowops-acts/internal/model"
 )
 
 type ReportRepository struct {
-    db *gorm.DB
+	db *gorm.DB
 }
 
-const cameraPolygonNameExpr = `
-    CASE LOWER(ae.camera_id)
-        WHEN 'shahovskoye' THEN 'Шаховское'
-        WHEN 'yakor' THEN 'Якорь'
-        WHEN 'solnechniy' THEN 'Солнечный'
-        ELSE NULL
-    END
+const cameraLandfillNameExpr = `
+	CASE LOWER(ae.camera_id)
+		WHEN 'shahovskoye' THEN 'шаховское'
+		WHEN 'yakor' THEN 'якорь'
+		WHEN 'solnechniy' THEN 'солнечный'
+		ELSE NULL
+	END
 `
 
 func NewReportRepository(db *gorm.DB) *ReportRepository {
-    return &ReportRepository{db: db}
+	return &ReportRepository{db: db}
 }
 
 func (r *ReportRepository) GetOrganization(ctx context.Context, id uuid.UUID) (*model.Organization, error) {
-    var org model.Organization
-    if err := r.db.WithContext(ctx).Raw(`
+	var org model.Organization
+	if err := r.db.WithContext(ctx).Raw(`
         SELECT id, name, type, bin, head_full_name, address, phone
         FROM organizations
         WHERE id = ?
         LIMIT 1
     `, id).Scan(&org).Error; err != nil {
-        return nil, err
-    }
-    if org.ID == uuid.Nil {
-        return nil, gorm.ErrRecordNotFound
-    }
-    return &org, nil
+		return nil, err
+	}
+	if org.ID == uuid.Nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &org, nil
 }
 
-func (r *ReportRepository) GetPolygon(ctx context.Context, id uuid.UUID) (uuid.UUID, string, error) {
-	var row struct {
-		ID   uuid.UUID
-		Name string
-	}
+func (r *ReportRepository) ListLandfills(ctx context.Context) ([]model.TripGroup, error) {
+	var rows []model.TripGroup
 	if err := r.db.WithContext(ctx).Raw(`
-        SELECT id, name
-        FROM polygons
-        WHERE id = ?
-        LIMIT 1
-    `, id).Scan(&row).Error; err != nil {
-		return uuid.Nil, "", err
-	}
-	if row.ID == uuid.Nil {
-		return uuid.Nil, "", gorm.ErrRecordNotFound
-	}
-	return row.ID, row.Name, nil
-}
-
-func (r *ReportRepository) ListPolygons(ctx context.Context) ([]model.TripGroup, error) {
-    var rows []model.TripGroup
-    if err := r.db.WithContext(ctx).Raw(`
         SELECT id, name, 0 AS trip_count
-        FROM polygons
+        FROM organizations
+        WHERE type = 'LANDFILL'
+          AND name NOT ILIKE 'TEST%'
         ORDER BY name ASC
     `).Scan(&rows).Error; err != nil {
-        return nil, err
-    }
-    return rows, nil
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (r *ReportRepository) ListContractors(ctx context.Context) ([]model.TripGroup, error) {
-    var rows []model.TripGroup
-    if err := r.db.WithContext(ctx).Raw(`
+	var rows []model.TripGroup
+	if err := r.db.WithContext(ctx).Raw(`
         SELECT id, name, 0 AS trip_count
         FROM organizations
         WHERE type = 'CONTRACTOR'
           AND name NOT ILIKE 'TEST%'
         ORDER BY name ASC
     `).Scan(&rows).Error; err != nil {
-        return nil, err
-    }
-    return rows, nil
+		return nil, err
+	}
+	return rows, nil
 }
 
-func (r *ReportRepository) EventCountsByPolygon(
+func (r *ReportRepository) EventCountsByLandfill(
 	ctx context.Context,
 	contractorID uuid.UUID,
 	from, to time.Time,
 ) ([]model.TripGroup, error) {
 	query := `
 		SELECT
-			p.id AS id,
-			p.name AS name,
+			lf.id AS id,
+			lf.name AS name,
 			COUNT(*) AS trip_count
 		FROM anpr_events ae
-		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
+		JOIN organizations lf
+		  ON lf.type = 'LANDFILL'
+		 AND LOWER(lf.name) = ` + cameraLandfillNameExpr + `
 		WHERE ae.contractor_id = ?
 			AND ae.matched_snow = true
 			AND ae.created_at >= ?
 			AND ae.created_at < ?
-		GROUP BY p.id, p.name
-		ORDER BY p.name ASC
+		GROUP BY lf.id, lf.name
+		ORDER BY lf.name ASC
 	`
+
 	var rows []model.TripGroup
 	if err := r.db.WithContext(ctx).Raw(query, contractorID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
@@ -116,10 +102,10 @@ func (r *ReportRepository) EventCountsByPolygon(
 
 func (r *ReportRepository) EventCountsByContractor(
 	ctx context.Context,
-	polygonIDs []uuid.UUID,
+	landfillIDs []uuid.UUID,
 	from, to time.Time,
 ) ([]model.TripGroup, error) {
-	if len(polygonIDs) == 0 {
+	if len(landfillIDs) == 0 {
 		return []model.TripGroup{}, nil
 	}
 
@@ -129,9 +115,11 @@ func (r *ReportRepository) EventCountsByContractor(
 			org.name AS name,
 			COUNT(*) AS trip_count
 		FROM anpr_events ae
-		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
+		JOIN organizations lf
+		  ON lf.type = 'LANDFILL'
+		 AND LOWER(lf.name) = ` + cameraLandfillNameExpr + `
 		JOIN organizations org ON org.id = ae.contractor_id
-		WHERE p.id = ANY(?)
+		WHERE lf.id = ANY(?)
 			AND org.type = 'CONTRACTOR'
 			AND org.name NOT ILIKE 'TEST%'
 			AND ae.matched_snow = true
@@ -142,32 +130,34 @@ func (r *ReportRepository) EventCountsByContractor(
 	`
 
 	var rows []model.TripGroup
-	if err := r.db.WithContext(ctx).Raw(query, polygonIDs, from, to).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(query, landfillIDs, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
 }
 
-func (r *ReportRepository) ListEventsByPolygon(
+func (r *ReportRepository) ListEventsByLandfill(
 	ctx context.Context,
 	contractorID uuid.UUID,
-	polygonID uuid.UUID,
+	landfillID uuid.UUID,
 	from, to time.Time,
 ) ([]model.TripDetail, error) {
 	query := `
 		SELECT
 			ae.created_at AS event_time,
 			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
-			p.id AS polygon_id,
-			p.name AS polygon_name,
+			lf.id AS polygon_id,
+			lf.name AS polygon_name,
 			ae.contractor_id,
 			org.name AS contractor_name,
 			ae.snow_volume_m3
 		FROM anpr_events ae
-		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
+		JOIN organizations lf
+		  ON lf.type = 'LANDFILL'
+		 AND LOWER(lf.name) = ` + cameraLandfillNameExpr + `
 		LEFT JOIN organizations org ON org.id = ae.contractor_id
 		WHERE ae.contractor_id = ?
-			AND p.id = ?
+			AND lf.id = ?
 			AND ae.matched_snow = true
 			AND ae.created_at >= ?
 			AND ae.created_at < ?
@@ -175,7 +165,7 @@ func (r *ReportRepository) ListEventsByPolygon(
 	`
 
 	var rows []model.TripDetail
-	if err := r.db.WithContext(ctx).Raw(query, contractorID, polygonID, from, to).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(query, contractorID, landfillID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
@@ -184,10 +174,10 @@ func (r *ReportRepository) ListEventsByPolygon(
 func (r *ReportRepository) ListEventsByContractor(
 	ctx context.Context,
 	contractorID uuid.UUID,
-	polygonIDs []uuid.UUID,
+	landfillIDs []uuid.UUID,
 	from, to time.Time,
 ) ([]model.TripDetail, error) {
-	if len(polygonIDs) == 0 {
+	if len(landfillIDs) == 0 {
 		return []model.TripDetail{}, nil
 	}
 
@@ -195,15 +185,17 @@ func (r *ReportRepository) ListEventsByContractor(
 		SELECT
 			ae.created_at AS event_time,
 			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
-			p.id AS polygon_id,
-			p.name AS polygon_name,
+			lf.id AS polygon_id,
+			lf.name AS polygon_name,
 			ae.contractor_id,
 			org.name AS contractor_name,
 			ae.snow_volume_m3
 		FROM anpr_events ae
-		JOIN polygons p ON p.name = ` + cameraPolygonNameExpr + `
+		JOIN organizations lf
+		  ON lf.type = 'LANDFILL'
+		 AND LOWER(lf.name) = ` + cameraLandfillNameExpr + `
 		JOIN organizations org ON org.id = ae.contractor_id
-		WHERE p.id = ANY(?)
+		WHERE lf.id = ANY(?)
 			AND ae.contractor_id = ?
 			AND org.type = 'CONTRACTOR'
 			AND org.name NOT ILIKE 'TEST%'
@@ -214,7 +206,7 @@ func (r *ReportRepository) ListEventsByContractor(
 	`
 
 	var rows []model.TripDetail
-	if err := r.db.WithContext(ctx).Raw(query, polygonIDs, contractorID, from, to).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(query, landfillIDs, contractorID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil

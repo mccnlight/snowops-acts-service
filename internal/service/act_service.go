@@ -37,9 +37,9 @@ type GenerateReportResult struct {
 }
 
 func NewActService(repo *repository.ReportRepository, excel ExcelGenerator, cfg *config.Config) *ActService {
-    return &ActService{
-        repo:          repo,
-        excel:         excel,
+	return &ActService{
+		repo:  repo,
+		excel: excel,
 	}
 }
 
@@ -64,68 +64,68 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 
 	var target *model.Organization
 	var groups []model.TripGroup
-	var landfillPolygonIDs []uuid.UUID
+	var landfillIDs []uuid.UUID
 
-    switch input.Mode {
-    case model.ReportModeContractor:
-        if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsContractor()) {
-            return nil, ErrPermissionDenied
-        }
-        if input.Principal.IsContractor() && input.Principal.OrgID != input.TargetID {
-            return nil, ErrPermissionDenied
-        }
+	switch input.Mode {
+	case model.ReportModeContractor:
+		if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsContractor()) {
+			return nil, ErrPermissionDenied
+		}
+		if input.Principal.IsContractor() && input.Principal.OrgID != input.TargetID {
+			return nil, ErrPermissionDenied
+		}
 
-        org, err := s.repo.GetOrganization(ctx, input.TargetID)
-        if err != nil {
-            if err == gorm.ErrRecordNotFound {
-                return nil, ErrNotFound
-            }
-            return nil, err
-        }
-        target = org
+		org, err := s.repo.GetOrganization(ctx, input.TargetID)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil, ErrNotFound
+			}
+			return nil, err
+		}
+		target = org
 
-		polygons, err := s.repo.ListPolygons(ctx)
+		landfills, err := s.repo.ListLandfills(ctx)
 		if err != nil {
 			return nil, err
 		}
-		counts, err := s.repo.EventCountsByPolygon(ctx, input.TargetID, periodStart, endExclusive)
+		counts, err := s.repo.EventCountsByLandfill(ctx, input.TargetID, periodStart, endExclusive)
 		if err != nil {
 			return nil, err
 		}
-		groups = mergeGroups(polygons, counts)
+		groups = mergeGroups(landfills, counts)
 
-    case model.ReportModeLandfill:
-        if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsLandfill()) {
-            return nil, ErrPermissionDenied
-        }
-
-        polygonID, polygonName, err := s.repo.GetPolygon(ctx, input.TargetID)
-        if err != nil {
-            if err == gorm.ErrRecordNotFound {
-                return nil, ErrNotFound
-            }
-            return nil, err
-        }
-        target = &model.Organization{
-            ID:   polygonID,
-            Name: polygonName,
-            Type: "LANDFILL",
-        }
-
-		landfillPolygonIDs = []uuid.UUID{polygonID}
+	case model.ReportModeLandfill:
+		if !(input.Principal.IsAkimat() || input.Principal.IsKgu() || input.Principal.IsLandfill()) {
+			return nil, ErrPermissionDenied
+		}
+		org, err := s.repo.GetOrganization(ctx, input.TargetID)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil, ErrNotFound
+			}
+			return nil, err
+		}
+		if !strings.EqualFold(org.Type, "LANDFILL") {
+			return nil, fmt.Errorf("%w: target_id must be LANDFILL organization", ErrInvalidInput)
+		}
+		if input.Principal.IsLandfill() && input.Principal.OrgID != input.TargetID {
+			return nil, ErrPermissionDenied
+		}
+		target = org
+		landfillIDs = []uuid.UUID{org.ID}
 		contractors, err := s.repo.ListContractors(ctx)
 		if err != nil {
 			return nil, err
 		}
-		counts, err := s.repo.EventCountsByContractor(ctx, polygonIDs, periodStart, endExclusive)
+		counts, err := s.repo.EventCountsByContractor(ctx, landfillIDs, periodStart, endExclusive)
 		if err != nil {
 			return nil, err
 		}
 		groups = mergeGroups(contractors, counts)
 
-    default:
-        return nil, fmt.Errorf("%w: invalid report mode", ErrInvalidInput)
-    }
+	default:
+		return nil, fmt.Errorf("%w: invalid report mode", ErrInvalidInput)
+	}
 
 	totalTrips := int64(0)
 	for _, group := range groups {
@@ -137,7 +137,7 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 			if groups[i].ID == uuid.Nil {
 				continue
 			}
-			trips, err := s.repo.ListEventsByPolygon(ctx, input.TargetID, groups[i].ID, periodStart, endExclusive)
+			trips, err := s.repo.ListEventsByLandfill(ctx, input.TargetID, groups[i].ID, periodStart, endExclusive)
 			if err != nil {
 				return nil, err
 			}
@@ -146,7 +146,7 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 			if groups[i].ID == uuid.Nil {
 				continue
 			}
-			trips, err := s.repo.ListEventsByContractor(ctx, groups[i].ID, landfillPolygonIDs, periodStart, endExclusive)
+			trips, err := s.repo.ListEventsByContractor(ctx, groups[i].ID, landfillIDs, periodStart, endExclusive)
 			if err != nil {
 				return nil, err
 			}
@@ -158,10 +158,10 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 		Mode:        input.Mode,
 		Target:      *target,
 		PeriodStart: periodStart,
-        PeriodEnd:   periodEnd,
-        TotalTrips:  totalTrips,
-        Groups:      groups,
-    }
+		PeriodEnd:   periodEnd,
+		TotalTrips:  totalTrips,
+		Groups:      groups,
+	}
 
     content, err := s.excel.Generate(report)
     if err != nil {

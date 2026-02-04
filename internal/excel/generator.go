@@ -20,7 +20,7 @@ func NewGenerator() *Generator {
 func (g *Generator) Generate(report model.ActReport) ([]byte, error) {
 	file := excelize.NewFile()
 
-	summarySheet := "Summary"
+	summarySheet := "Сводка"
 	file.SetSheetName("Sheet1", summarySheet)
 	if err := g.writeSummary(file, summarySheet, report); err != nil {
 		return nil, err
@@ -53,23 +53,23 @@ func (g *Generator) writeSummary(file *excelize.File, sheet string, report model
 		_ = file.SetCellValue(sheet, cell, value)
 	}
 
-	set("A1", "Report Type")
+	set("A1", "Тип отчета")
 	set("B1", modeLabel)
-	set("A2", "Target")
+	set("A2", "Организация")
 	set("B2", report.Target.Name)
-	set("A3", "Period Start")
+	set("A3", "Начало периода")
 	set("B3", formatDate(report.PeriodStart))
-	set("A4", "Period End")
+	set("A4", "Конец периода")
 	set("B4", formatDate(report.PeriodEnd))
-	set("A5", "Total Trips")
+	set("A5", "Количество рейсов")
 	set("B5", report.TotalTrips)
-	set("A6", "Total Volume M3")
+	set("A6", "Объем снега, м3")
 	set("B6", formatFloatValue(totalVolume, true))
 
 	tableRow := 8
 	set(fmt.Sprintf("A%d", tableRow), groupLabel)
-	set(fmt.Sprintf("B%d", tableRow), "Trip Count")
-	set(fmt.Sprintf("C%d", tableRow), "Volume M3")
+	set(fmt.Sprintf("B%d", tableRow), "Количество рейсов")
+	set(fmt.Sprintf("C%d", tableRow), "Объем снега, м3")
 
 	for i, group := range report.Groups {
 		row := tableRow + 1 + i
@@ -92,28 +92,28 @@ func (g *Generator) writeDetail(file *excelize.File, sheet string, report model.
 		_ = file.SetCellValue(sheet, cell, value)
 	}
 
-	set("A1", "Report Type")
+	set("A1", "Тип отчета")
 	set("B1", modeLabel)
-	set("A2", "Target")
+	set("A2", "Организация")
 	set("B2", report.Target.Name)
 	set("A3", groupLabel)
 	set("B3", group.Name)
-	set("A4", "Period Start")
+	set("A4", "Начало периода")
 	set("B4", formatDate(report.PeriodStart))
-	set("A5", "Period End")
+	set("A5", "Конец периода")
 	set("B5", formatDate(report.PeriodEnd))
-	set("A6", "Trip Count")
+	set("A6", "Количество рейсов")
 	set("B6", group.TripCount)
-	set("A7", "Total Volume M3")
+	set("A7", "Объем снега, м3")
 	set("B7", formatFloatValue(groupVolume, true))
 
 	tableRow := 9
 	headers := []string{
-		"Date",
-		"Plate",
-		"Polygon",
-		"Contractor",
-		"Volume M3",
+		"Дата",
+		"Номер машины",
+		"Полигон",
+		"Подрядчик",
+		"Объем снега, м3",
 	}
 	for i, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, tableRow)
@@ -139,11 +139,11 @@ func (g *Generator) writeDetail(file *excelize.File, sheet string, report model.
 func reportLabels(mode model.ReportMode) (string, string) {
 	switch mode {
 	case model.ReportModeLandfill:
-		return "Landfill", "Contractor"
+		return "Полигон", "Подрядчик"
 	case model.ReportModeContractor:
-		return "Contractor", "Landfill"
+		return "Подрядчик", "Полигон"
 	default:
-		return "Unknown", "Group"
+		return "Отчет", "Группа"
 	}
 }
 
@@ -178,7 +178,7 @@ func buildSheetName(mode model.ReportMode, name string, id uuid.UUID, used map[s
 func sanitizeSheetName(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "Sheet"
+		return "Лист"
 	}
 
 	replacer := strings.NewReplacer(
@@ -193,7 +193,7 @@ func sanitizeSheetName(value string) string {
 	value = replacer.Replace(value)
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "Sheet"
+		return "Лист"
 	}
 	return value
 }
