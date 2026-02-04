@@ -35,7 +35,7 @@
   `event_time`, `created_at`, `normalized_plate`, `raw_plate`,
   `polygon_id`, `contractor_id`, `snow_volume_m3`
 
-**Время события:** используется `created_at`.
+**Время события:** используется `event_time`.
 **Номер машины:** `normalized_plate`, если пусто — `raw_plate`.
 **Объём:** `snow_volume_m3`.
 

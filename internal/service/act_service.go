@@ -64,7 +64,7 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 
 	var target *model.Organization
 	var groups []model.TripGroup
-	var landfillIDs []uuid.UUID
+	var landfillID uuid.UUID
 
 	switch input.Mode {
 	case model.ReportModeContractor:
@@ -112,12 +112,12 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 			return nil, ErrPermissionDenied
 		}
 		target = org
-		landfillIDs = []uuid.UUID{org.ID}
+		landfillID = org.ID
 		contractors, err := s.repo.ListContractors(ctx)
 		if err != nil {
 			return nil, err
 		}
-		counts, err := s.repo.EventCountsByContractor(ctx, landfillIDs, periodStart, endExclusive)
+		counts, err := s.repo.EventCountsByContractor(ctx, landfillID, periodStart, endExclusive)
 		if err != nil {
 			return nil, err
 		}
@@ -146,7 +146,7 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 			if groups[i].ID == uuid.Nil {
 				continue
 			}
-			trips, err := s.repo.ListEventsByContractor(ctx, groups[i].ID, landfillIDs, periodStart, endExclusive)
+			trips, err := s.repo.ListEventsByContractor(ctx, groups[i].ID, landfillID, periodStart, endExclusive)
 			if err != nil {
 				return nil, err
 			}

@@ -87,8 +87,8 @@ func (r *ReportRepository) EventCountsByLandfill(
 		 AND LOWER(lf.name) = ` + cameraLandfillNameExpr + `
 		WHERE ae.contractor_id = ?
 			AND ae.matched_snow = true
-			AND ae.created_at >= ?
-			AND ae.created_at < ?
+			AND ae.event_time >= ?
+			AND ae.event_time < ?
 		GROUP BY lf.id, lf.name
 		ORDER BY lf.name ASC
 	`
@@ -102,13 +102,9 @@ func (r *ReportRepository) EventCountsByLandfill(
 
 func (r *ReportRepository) EventCountsByContractor(
 	ctx context.Context,
-	landfillIDs []uuid.UUID,
+	landfillID uuid.UUID,
 	from, to time.Time,
 ) ([]model.TripGroup, error) {
-	if len(landfillIDs) == 0 {
-		return []model.TripGroup{}, nil
-	}
-
 	query := `
 		SELECT
 			ae.contractor_id AS id,
@@ -119,18 +115,18 @@ func (r *ReportRepository) EventCountsByContractor(
 		  ON lf.type = 'LANDFILL'
 		 AND LOWER(lf.name) = ` + cameraLandfillNameExpr + `
 		JOIN organizations org ON org.id = ae.contractor_id
-		WHERE lf.id = ANY(?)
+		WHERE lf.id = ?
 			AND org.type = 'CONTRACTOR'
 			AND org.name NOT ILIKE 'TEST%'
 			AND ae.matched_snow = true
-			AND ae.created_at >= ?
-			AND ae.created_at < ?
+			AND ae.event_time >= ?
+			AND ae.event_time < ?
 		GROUP BY ae.contractor_id, org.name
 		ORDER BY name ASC
 	`
 
 	var rows []model.TripGroup
-	if err := r.db.WithContext(ctx).Raw(query, landfillIDs, from, to).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(query, landfillID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
@@ -144,7 +140,7 @@ func (r *ReportRepository) ListEventsByLandfill(
 ) ([]model.TripDetail, error) {
 	query := `
 		SELECT
-			ae.created_at AS event_time,
+			ae.event_time AS event_time,
 			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
 			lf.id AS polygon_id,
 			lf.name AS polygon_name,
@@ -159,8 +155,8 @@ func (r *ReportRepository) ListEventsByLandfill(
 		WHERE ae.contractor_id = ?
 			AND lf.id = ?
 			AND ae.matched_snow = true
-			AND ae.created_at >= ?
-			AND ae.created_at < ?
+			AND ae.event_time >= ?
+			AND ae.event_time < ?
 		ORDER BY event_time ASC
 	`
 
@@ -174,16 +170,12 @@ func (r *ReportRepository) ListEventsByLandfill(
 func (r *ReportRepository) ListEventsByContractor(
 	ctx context.Context,
 	contractorID uuid.UUID,
-	landfillIDs []uuid.UUID,
+	landfillID uuid.UUID,
 	from, to time.Time,
 ) ([]model.TripDetail, error) {
-	if len(landfillIDs) == 0 {
-		return []model.TripDetail{}, nil
-	}
-
 	query := `
 		SELECT
-			ae.created_at AS event_time,
+			ae.event_time AS event_time,
 			COALESCE(ae.normalized_plate, ae.raw_plate) AS plate,
 			lf.id AS polygon_id,
 			lf.name AS polygon_name,
@@ -195,18 +187,18 @@ func (r *ReportRepository) ListEventsByContractor(
 		  ON lf.type = 'LANDFILL'
 		 AND LOWER(lf.name) = ` + cameraLandfillNameExpr + `
 		JOIN organizations org ON org.id = ae.contractor_id
-		WHERE lf.id = ANY(?)
+		WHERE lf.id = ?
 			AND ae.contractor_id = ?
 			AND org.type = 'CONTRACTOR'
 			AND org.name NOT ILIKE 'TEST%'
 			AND ae.matched_snow = true
-			AND ae.created_at >= ?
-			AND ae.created_at < ?
+			AND ae.event_time >= ?
+			AND ae.event_time < ?
 		ORDER BY event_time ASC
 	`
 
 	var rows []model.TripDetail
-	if err := r.db.WithContext(ctx).Raw(query, landfillIDs, contractorID, from, to).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(query, landfillID, contractorID, from, to).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
