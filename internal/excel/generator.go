@@ -108,13 +108,14 @@ func (g *Generator) writeDetail(file *excelize.File, sheet string, report model.
 	set("B7", formatFloatValue(groupVolume, true))
 
 	tableRow := 9
-	headers := []string{
-		"Дата",
-		"Номер машины",
-		"Полигон",
-		"Подрядчик",
-		"Объем снега, м3",
+	headers := []string{"Дата", "Номер машины"}
+	if report.Mode == model.ReportModeContractor {
+		headers = append(headers, "Полигон")
 	}
+	if report.Mode == model.ReportModeLandfill {
+		headers = append(headers, "Подрядчик")
+	}
+	headers = append(headers, "Объем снега, м3")
 	for i, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, tableRow)
 		set(cell, header)
@@ -124,15 +125,19 @@ func (g *Generator) writeDetail(file *excelize.File, sheet string, report model.
 		row := tableRow + 1 + i
 		set(fmt.Sprintf("A%d", row), formatDateTime(trip.EventTime))
 		set(fmt.Sprintf("B%d", row), formatString(trip.Plate))
-		set(fmt.Sprintf("C%d", row), formatString(trip.PolygonName))
-		set(fmt.Sprintf("D%d", row), formatString(trip.ContractorName))
-		set(fmt.Sprintf("E%d", row), formatFloat(trip.SnowVolumeM3))
+		if report.Mode == model.ReportModeContractor {
+			set(fmt.Sprintf("C%d", row), formatString(trip.PolygonName))
+			set(fmt.Sprintf("D%d", row), formatFloat(trip.SnowVolumeM3))
+			continue
+		}
+		set(fmt.Sprintf("C%d", row), formatString(trip.ContractorName))
+		set(fmt.Sprintf("D%d", row), formatFloat(trip.SnowVolumeM3))
 	}
 
 	_ = file.SetColWidth(sheet, "A", "A", 20)
 	_ = file.SetColWidth(sheet, "B", "B", 16)
-	_ = file.SetColWidth(sheet, "C", "D", 32)
-	_ = file.SetColWidth(sheet, "E", "E", 14)
+	_ = file.SetColWidth(sheet, "C", "C", 32)
+	_ = file.SetColWidth(sheet, "D", "D", 14)
 	return nil
 }
 
