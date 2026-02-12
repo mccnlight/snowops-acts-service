@@ -1,16 +1,21 @@
-﻿# Snowops Acts Service
+# Snowops Acts Service
 
-Сервис формирует Excel-акты по ивентам вывоза снега. Для фронтенда используется один эндпоинт: `POST /acts/export`.
+Сервис формирует акты по ивентам вывоза снега в двух форматах:
+
+- Excel: `POST /acts/export`
+- PDF: `POST /acts/export/pdf`
+
+> Отдельный фронтовый гайд: `README_FRONTEND_ACTS_EXPORT.md`
 
 ## Быстрый старт для фронтенда
 
 1. Получить JWT в auth-сервисе.
-2. Отправить `POST /acts/export` с `mode`, `target_id`, `period_start`, `period_end`.
-3. Принять ответ как бинарный файл (`.xlsx`) и сохранить/скачать.
+2. Отправить `POST /acts/export` или `POST /acts/export/pdf` с `mode`, `target_id`, `period_start`, `period_end`.
+3. Принять ответ как бинарный файл (`.xlsx` или `.pdf`) и сохранить/скачать.
 
 ## Эндпоинт
 
-### `POST /acts/export`
+### `POST /acts/export` (Excel)
 
 - Заголовки:
   - `Authorization: Bearer <jwt>`
@@ -44,6 +49,20 @@
 - `Content-Disposition: attachment; filename="acts-...xlsx"`
 - Тело ответа — бинарный Excel файл.
 
+### `POST /acts/export/pdf` (PDF)
+
+- Заголовки:
+  - `Authorization: Bearer <jwt>`
+  - `Content-Type: application/json`
+- Тело запроса: такое же, как у Excel-эндпоинта.
+
+## Что приходит в ответ (PDF)
+
+- HTTP `200`
+- `Content-Type: application/pdf`
+- `Content-Disposition: attachment; filename="acts-...pdf"`
+- Тело ответа — бинарный PDF файл.
+
 ## Структура Excel
 
 - Лист 1: `Сводка`
@@ -76,7 +95,7 @@
 - `404` — организация не найдена
 - `500` — внутренняя ошибка
 
-## Пример (fetch)
+## Пример (fetch, Excel)
 
 ```js
 const response = await fetch('https://snowops-acts-service.onrender.com/acts/export', {
@@ -107,6 +126,37 @@ a.click();
 URL.revokeObjectURL(url);
 ```
 
+## Пример (fetch, PDF)
+
+```js
+const response = await fetch('https://snowops-acts-service.onrender.com/acts/export/pdf', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    mode: 'landfill',
+    target_id: landfillOrgId,
+    period_start: '2026-02-01',
+    period_end: '2026-02-04',
+  }),
+});
+
+if (!response.ok) {
+  const text = await response.text();
+  throw new Error(`Export failed: ${response.status} ${text}`);
+}
+
+const blob = await response.blob();
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = 'acts.pdf';
+a.click();
+URL.revokeObjectURL(url);
+```
+
 ## Конфигурация сервиса
 
 | Переменная | Описание |
@@ -116,3 +166,4 @@ URL.revokeObjectURL(url);
 | `DB_DSN` | строка подключения к Postgres |
 | `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS`, `DB_CONN_MAX_LIFETIME` | настройки пула БД |
 | `JWT_ACCESS_SECRET` | секрет проверки JWT (должен совпадать с auth-сервисом) |
+| `PDF_FONT_PATH` | (опционально) путь к `.ttf` шрифту с поддержкой кириллицы для PDF, например `C:\Windows\Fonts\arial.ttf` |

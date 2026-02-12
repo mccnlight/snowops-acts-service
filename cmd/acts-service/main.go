@@ -11,6 +11,7 @@ import (
 	httphandler "github.com/nurpe/snowops-acts/internal/http"
 	"github.com/nurpe/snowops-acts/internal/http/middleware"
 	"github.com/nurpe/snowops-acts/internal/logger"
+	"github.com/nurpe/snowops-acts/internal/pdf"
 	"github.com/nurpe/snowops-acts/internal/repository"
 	"github.com/nurpe/snowops-acts/internal/service"
 )
@@ -31,8 +32,9 @@ func main() {
 
 	reportRepo := repository.NewReportRepository(database)
 	excelGenerator := excel.NewGenerator()
+	pdfGenerator := pdf.NewGenerator()
 
-	actService := service.NewActService(reportRepo, excelGenerator, cfg)
+	actService := service.NewActService(reportRepo, excelGenerator, pdfGenerator, cfg)
 
 	tokenParser := auth.NewParser(cfg.Auth.AccessSecret)
 	handler := httphandler.NewHandler(actService, log)

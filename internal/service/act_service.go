@@ -1,66 +1,108 @@
 package service
 
 import (
-    "context"
-    "fmt"
-    "strings"
-    "time"
+	"context"
+	"fmt"
+	"strings"
+	"time"
 
-    "github.com/google/uuid"
-    "gorm.io/gorm"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 
-    "github.com/nurpe/snowops-acts/internal/config"
-    "github.com/nurpe/snowops-acts/internal/model"
-    "github.com/nurpe/snowops-acts/internal/repository"
+	"github.com/nurpe/snowops-acts/internal/config"
+	"github.com/nurpe/snowops-acts/internal/model"
+	"github.com/nurpe/snowops-acts/internal/repository"
 )
 
 type ExcelGenerator interface {
-    Generate(report model.ActReport) ([]byte, error)
+	Generate(report model.ActReport) ([]byte, error)
+}
+
+type PDFGenerator interface {
+	Generate(report model.ActReport) ([]byte, error)
 }
 
 type ActService struct {
-	repo          *repository.ReportRepository
-	excel         ExcelGenerator
+	repo  *repository.ReportRepository
+	excel ExcelGenerator
+	pdf   PDFGenerator
 }
 
 type GenerateReportInput struct {
-    Mode        model.ReportMode
-    TargetID    uuid.UUID
-    PeriodStart time.Time
-    PeriodEnd   time.Time
-    Principal   model.Principal
+	Mode        model.ReportMode
+	TargetID    uuid.UUID
+	PeriodStart time.Time
+	PeriodEnd   time.Time
+	Principal   model.Principal
 }
 
 type GenerateReportResult struct {
-    FileName string
-    Content  []byte
+	FileName string
+	Content  []byte
 }
 
-func NewActService(repo *repository.ReportRepository, excel ExcelGenerator, cfg *config.Config) *ActService {
+func NewActService(repo *repository.ReportRepository, excel ExcelGenerator, pdf PDFGenerator, cfg *config.Config) *ActService {
 	return &ActService{
 		repo:  repo,
 		excel: excel,
+		pdf:   pdf,
 	}
 }
 
 func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInput) (*GenerateReportResult, error) {
-    if input.Principal.IsDriver() {
-        return nil, ErrPermissionDenied
-    }
-    if input.TargetID == uuid.Nil {
-        return nil, fmt.Errorf("%w: target_id is required", ErrInvalidInput)
-    }
-    if input.PeriodStart.IsZero() || input.PeriodEnd.IsZero() {
-        return nil, fmt.Errorf("%w: period dates are required", ErrInvalidInput)
-    }
+	report, err := s.buildReport(ctx, input)
+	if err != nil {
+		return nil, err
+	}
 
-    periodStart := dateOnly(input.PeriodStart)
-    periodEnd := dateOnly(input.PeriodEnd)
-    if periodStart.After(periodEnd) {
-        return nil, fmt.Errorf("%w: period_start must be before or equal to period_end", ErrInvalidInput)
-    }
+	content, err := s.excel.Generate(*report)
+	if err != nil {
+		return nil, err
+	}
 
-    endExclusive := periodEnd.Add(24 * time.Hour)
+	fileName := s.buildFileName(*report)
+	return &GenerateReportResult{
+		FileName: fileName,
+		Content:  content,
+	}, nil
+}
+
+func (s *ActService) GenerateReportPDF(ctx context.Context, input GenerateReportInput) (*GenerateReportResult, error) {
+	report, err := s.buildReport(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	content, err := s.pdf.Generate(*report)
+	if err != nil {
+		return nil, err
+	}
+
+	fileName := s.buildPDFFileName(*report)
+	return &GenerateReportResult{
+		FileName: fileName,
+		Content:  content,
+	}, nil
+}
+
+func (s *ActService) buildReport(ctx context.Context, input GenerateReportInput) (*model.ActReport, error) {
+	if input.Principal.IsDriver() {
+		return nil, ErrPermissionDenied
+	}
+	if input.TargetID == uuid.Nil {
+		return nil, fmt.Errorf("%w: target_id is required", ErrInvalidInput)
+	}
+	if input.PeriodStart.IsZero() || input.PeriodEnd.IsZero() {
+		return nil, fmt.Errorf("%w: period dates are required", ErrInvalidInput)
+	}
+
+	periodStart := dateOnly(input.PeriodStart)
+	periodEnd := dateOnly(input.PeriodEnd)
+	if periodStart.After(periodEnd) {
+		return nil, fmt.Errorf("%w: period_start must be before or equal to period_end", ErrInvalidInput)
+	}
+
+	endExclusive := periodEnd.Add(24 * time.Hour)
 
 	var target *model.Organization
 	var groups []model.TripGroup
@@ -163,53 +205,54 @@ func (s *ActService) GenerateReport(ctx context.Context, input GenerateReportInp
 		Groups:      groups,
 	}
 
-    content, err := s.excel.Generate(report)
-    if err != nil {
-        return nil, err
-    }
-
-    fileName := s.buildFileName(report)
-    return &GenerateReportResult{
-        FileName: fileName,
-        Content:  content,
-    }, nil
+	return &report, nil
 }
 
 func (s *ActService) buildFileName(report model.ActReport) string {
-    mode := strings.ToLower(string(report.Mode))
-    target := sanitizeFileName(report.Target.Name)
-    if target == "" {
-        target = report.Target.ID.String()
-    }
-    period := fmt.Sprintf("%s-%s", report.PeriodStart.Format("20060102"), report.PeriodEnd.Format("20060102"))
-    return fmt.Sprintf("acts-%s-%s-%s.xlsx", mode, target, period)
+	mode := strings.ToLower(string(report.Mode))
+	target := sanitizeFileName(report.Target.Name)
+	if target == "" {
+		target = report.Target.ID.String()
+	}
+	period := fmt.Sprintf("%s-%s", report.PeriodStart.Format("20060102"), report.PeriodEnd.Format("20060102"))
+	return fmt.Sprintf("acts-%s-%s-%s.xlsx", mode, target, period)
+}
+
+func (s *ActService) buildPDFFileName(report model.ActReport) string {
+	mode := strings.ToLower(string(report.Mode))
+	target := sanitizeFileName(report.Target.Name)
+	if target == "" {
+		target = report.Target.ID.String()
+	}
+	period := fmt.Sprintf("%s-%s", report.PeriodStart.Format("20060102"), report.PeriodEnd.Format("20060102"))
+	return fmt.Sprintf("acts-%s-%s-%s.pdf", mode, target, period)
 }
 
 func dateOnly(t time.Time) time.Time {
-    if t.IsZero() {
-        return t
-    }
-    y, m, d := t.Date()
-    return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	if t.IsZero() {
+		return t
+	}
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
 func sanitizeFileName(input string) string {
-    result := make([]rune, 0, len(input))
-    for _, r := range input {
-        switch {
-        case r >= 'a' && r <= 'z':
-            result = append(result, r)
-        case r >= 'A' && r <= 'Z':
-            result = append(result, r)
-        case r >= '0' && r <= '9':
-            result = append(result, r)
-        case r == '-', r == '_':
-            result = append(result, r)
-        default:
-            result = append(result, '-')
-        }
-    }
-    return strings.Trim(string(result), "-")
+	result := make([]rune, 0, len(input))
+	for _, r := range input {
+		switch {
+		case r >= 'a' && r <= 'z':
+			result = append(result, r)
+		case r >= 'A' && r <= 'Z':
+			result = append(result, r)
+		case r >= '0' && r <= '9':
+			result = append(result, r)
+		case r == '-', r == '_':
+			result = append(result, r)
+		default:
+			result = append(result, '-')
+		}
+	}
+	return strings.Trim(string(result), "-")
 }
 
 func mergeGroups(base []model.TripGroup, counts []model.TripGroup) []model.TripGroup {
